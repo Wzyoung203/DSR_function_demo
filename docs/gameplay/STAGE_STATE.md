@@ -24,7 +24,7 @@
 | 每个任务的运行状态 | `QuestController` | `StageController` 只调用 `status_of(quest_id)` |
 | 阶段序号与环节 | `StageController` | `QuestController` 只调用 `get_stage_index()`，用来判解锁／失效窗口 |
 
-- 任务控制器不监听 `phase_changed`，「离开场地即完成」由任务自己的区域条件表达，不是靠阶段变化触发。
+- 任务控制器不监听 `phase_changed`；`task_a` 完成由 `task_a_returned` 状态字段驱动（见下文“任务一的奖励与返回闭环”），不是靠阶段变化触发。
 - 任务控制器订阅阶段控制器的只读广播 `stage_changed` 来重算窗口；阶段控制器订阅 `quest_changed` 来重推阶段。
   两边都只读值、不调用对方的行为，重算幂等且只在值变化时广播，所以不会来回震荡。
 - `StageStateController` 只负责把同一张配置表分发给两个控制器，不再做「任务监听阶段」这类接线。
