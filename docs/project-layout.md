@@ -20,7 +20,7 @@ movement_demo/
 │   │   └── objects/       具体交互物：门禁卡、酒杯、终端、唱片机
 │   ├── presentation/      模型包装场景和独立接口演示
 │   ├── effects/           共用命中特效管理器和粒子场景
-│   └── ui/                对话界面场景
+│   └── ui/                对话界面、任务面板与奖励面板场景
 ├── scripts/
 │   ├── enemy/             身体、AI 协调、装配与评分入口
 │   │   ├── actions/       默认行为、战术动作和共用动作执行组件
@@ -30,7 +30,7 @@ movement_demo/
 │   ├── weapons/           武器数据与弹药执行
 │   ├── world/             掩体、训练靶、区域、门、NPC、交互物与屏障
 │   │   └── interactions/  交互效果基类、注入上下文与各效果实现
-│   ├── ui/                对话界面与锁定准星
+│   ├── ui/                对话界面、锁定准星、任务面板与奖励面板
 │   ├── debug/             调试开关、声音和攻击点预览
 │   └── systems/           公共游戏状态与声音数据
 │       ├── stage/         阶段、任务与 NPC 状态控制器
@@ -58,6 +58,10 @@ movement_demo/
 新增运行脚本按职责放入对应目录；新增敌人动作实现放 `scripts/enemy/actions/`，其定义资源放 `resources/enemy/actions/`。新增交互效果放 `scripts/world/interactions/`，具体交互物场景放 `scenes/world/objects/`；交互物与效果只通过 `InteractionContext` 使用注入的状态，不直接查找全局节点。测试或临时诊断不要放回工程根目录，也不要混入运行脚本目录。
 
 阶段、任务与 NPC 状态规则集中在 `scripts/systems/stage/`：阶段判定、任务状态与状态解析各一个控制器，配置表资源脚本与 `resources/stages/` 下的 `.tres` 配套维护。控制器挂在 `main.tscn`、按 group 互相查找，不新增全局单例；NPC 只按 `npc_id` 与接收接口被驱动，不反向依赖控制器。见 [阶段与任务](gameplay/STAGE_STATE.md)。
+
+战斗遭遇闭环由 `scripts/systems/stage/encounter_controller.gd` 承担：监听竞技场 `combat_cleared`，暂停并打开奖励面板，分发急救包／弹药／系统进度三种奖励，激活返回传送门，并在玩家交互传送门时写入 `task_a_returned`、把玩家传送到 `TavernReturnPoint`。它只读 `QuestController`／`StageController` 的查询接口，不改任务与阶段的权威判定。
+
+奖励面板 `scenes/ui/reward_board.tscn` + `scripts/ui/reward_board.gd` 是默认隐藏的三选一界面；`process_mode` 设为 ALWAYS，因此场景树暂停时仍能处理输入，每次显示只允许发出一个 `reward_selected`。面板本身不写玩家、弹药或进度，只回传所选奖励 id 给遭遇控制器。对应测试有 `tests/quest_encounter_loop_test.gd`（端到端闭环）和 `tests/reward_board_test.gd`（面板单次选择）。
 
 `docs/enemy-ai.md` 是敌人结构、维护和使用部署说明；`docs/gameplay/` 保留移动、武器、掩体等专项说明，`docs/TODO.md` 记录后续方向，`docs/superpowers/` 保存仍有价值的设计与验收记录。第三方插件自带文档留在插件目录，以保留其使用说明和许可。
 
