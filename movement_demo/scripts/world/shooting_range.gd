@@ -1,10 +1,12 @@
 extends Node3D
 
 signal presentation_reset(region: Node)
+signal combat_cleared(region: Node)
 
 var players_inside: Array[Node3D] = []
 var enemies: Array[CharacterBody3D] = []
 var _combat_zone: Area3D
+var _encounter_cleared: bool = false
 
 
 func enemy_environment() -> Dictionary:
@@ -14,6 +16,9 @@ func enemy_environment() -> Dictionary:
 func register_enemy(enemy: CharacterBody3D) -> void:
 	if not enemies.has(enemy):
 		enemies.append(enemy)
+	var died_callback := Callable(self, "_on_enemy_died")
+	if enemy.has_signal("died") and not enemy.is_connected("died", died_callback):
+		enemy.connect("died", died_callback)
 
 
 func unregister_enemy(enemy: CharacterBody3D) -> void:
@@ -26,6 +31,7 @@ func _ready() -> void:
 
 func _physics_process(_delta: float) -> void:
 	_bind_combat_zone()
+	_check_combat_cleared()
 
 
 func _bind_combat_zone() -> void:
@@ -58,6 +64,7 @@ func _on_player_exited(body: Node3D) -> void:
 
 
 func _reset_targets() -> void:
+	_encounter_cleared = false
 	presentation_reset.emit(self)
 	# 直接子靶与注册的嵌套敌人去重，只刷新本区域。
 	var targets: Array[Node] = []
@@ -69,3 +76,23 @@ func _reset_targets() -> void:
 		# 重开卸载场景也会发出离场信号；已出树的目标无需刷新。
 		if target.is_inside_tree() and target.has_method("reset_target"):
 			target.reset_target()
+
+
+func _on_enemy_died() -> void:
+	_check_combat_cleared()
+
+
+func _check_combat_cleared() -> void:
+	if _encounter_cleared or players_inside.is_empty():
+		return
+	var registered_enemies: Array[CharacterBody3D] = []
+	for enemy in enemies:
+		if is_instance_valid(enemy) and enemy.is_inside_tree():
+			registered_enemies.append(enemy)
+	if registered_enemies.is_empty():
+		return
+	for enemy in registered_enemies:
+		if not enemy.get("is_dead"):
+			return
+	_encounter_cleared = true
+	combat_cleared.emit(self)
