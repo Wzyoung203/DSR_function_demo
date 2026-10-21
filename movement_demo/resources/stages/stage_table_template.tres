@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="StageTable" load_steps=22 format=3]
+[gd_resource type="Resource" script_class="StageTable" load_steps=21 format=3]
 
 [ext_resource type="Script" uid="uid://bfmp8qi3o3mtp" path="res://scripts/systems/stage/stage_table.gd" id="1_table"]
 [ext_resource type="Script" uid="uid://c8dqqe2ui2p2m" path="res://scripts/systems/stage/stage_definition.gd" id="2_stage"]
@@ -28,15 +28,11 @@ source = 0
 key = &"help_choice"
 state_value = "refused"
 
-[sub_resource type="Resource" id="Condition_task_a_enter"]
+[sub_resource type="Resource" id="Condition_task_a_returned"]
 script = ExtResource("5_condition")
-source = 4
-key = &"arena"
-
-[sub_resource type="Resource" id="Condition_task_a_leave"]
-script = ExtResource("5_condition")
-source = 5
-key = &"arena"
+source = 0
+key = &"task_a_returned"
+state_value = "returned"
 
 [sub_resource type="Resource" id="Quest_task_a"]
 script = ExtResource("3_quest")
@@ -46,7 +42,7 @@ stage_index = 1
 target_area = &"arena"
 accept_conditions = Array[ExtResource("5_condition")]([SubResource("Condition_task_a_accept")])
 refuse_conditions = Array[ExtResource("5_condition")]([SubResource("Condition_task_a_refuse")])
-complete_conditions = Array[ExtResource("5_condition")]([SubResource("Condition_task_a_enter"), SubResource("Condition_task_a_leave")])
+complete_conditions = Array[ExtResource("5_condition")]([SubResource("Condition_task_a_returned")])
 
 [sub_resource type="Resource" id="Condition_music_accept"]
 script = ExtResource("5_condition")
