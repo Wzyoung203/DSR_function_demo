@@ -23,6 +23,7 @@ extends Node
 
 var _reward_open := false
 var _reward_selected := false
+var _pause_owned := false
 
 
 func _ready() -> void:
@@ -36,6 +37,16 @@ func _bind_signals() -> void:
 		reward_board.reward_selected.connect(_on_reward_selected)
 	if portal != null and portal.has_signal(&"interacted") and not portal.interacted.is_connected(_on_portal_interacted):
 		portal.interacted.connect(_on_portal_interacted)
+	_bind_player_death()
+
+
+func _bind_player_death() -> void:
+	var player := _player()
+	if player == null:
+		return
+	var health := player.get_node_or_null("Health")
+	if health != null and health.has_signal(&"died") and not health.died.is_connected(_on_player_died):
+		health.died.connect(_on_player_died)
 
 
 func _on_combat_cleared(region: Node) -> void:
@@ -49,10 +60,15 @@ func _on_combat_cleared(region: Node) -> void:
 		return
 	if _player_zone() != &"site":
 		return
+	if reward_board == null or not reward_board.has_method(&"show_board"):
+		push_error("EncounterController: reward board is missing or does not implement show_board()")
+		return
+	var tree := get_tree()
 	_reward_open = true
-	get_tree().paused = true
-	if reward_board != null and reward_board.has_method(&"show_board"):
-		reward_board.show_board()
+	_pause_owned = not tree.paused
+	if _pause_owned:
+		tree.paused = true
+	reward_board.show_board()
 
 
 func _on_reward_selected(reward_id: StringName) -> void:
@@ -63,9 +79,17 @@ func _on_portal_interacted(_interactable: Node, _player: Node3D) -> void:
 	return_to_tavern()
 
 
+func _on_player_died() -> void:
+	if _reward_open:
+		_freeze_for_dead_player()
+
+
 ## 战斗奖励分派。无效奖励或重复选择返回 false；成功则解除暂停并激活返回传送门。
 func select_reward(reward_id: StringName) -> bool:
 	if _reward_selected or not _reward_open:
+		return false
+	if not _player_alive():
+		_freeze_for_dead_player()
 		return false
 	match reward_id:
 		&"first_aid":
@@ -76,11 +100,15 @@ func select_reward(reward_id: StringName) -> bool:
 			_add_progress()
 		_:
 			return false
+	var tree := get_tree()
+	var owned_pause := _pause_owned
 	_reward_selected = true
 	_reward_open = false
+	_pause_owned = false
 	if reward_board != null:
 		reward_board.visible = false
-	get_tree().paused = false
+	if owned_pause:
+		tree.paused = false
 	activate_return_portal()
 	return true
 
@@ -100,14 +128,20 @@ func return_to_tavern() -> bool:
 		return false
 	if _quest_status() != QuestController.Status.IN_PROGRESS:
 		return false
+	var player := _player()
+	if player == null:
+		push_error("EncounterController: cannot return to tavern without a player")
+		return false
+	if return_point == null or not is_instance_valid(return_point) or not return_point.is_inside_tree():
+		push_error("EncounterController: cannot return to tavern without a valid return point")
+		return false
 	var state := _state()
 	if state == null:
+		push_error("EncounterController: cannot return to tavern without GameState")
 		return false
 	state.set(turnin_field, turnin_value)
 	_zero_player_motion()
-	var player := _player()
-	if player != null and return_point != null:
-		player.global_position = return_point.global_position
+	player.global_position = return_point.global_position
 	if portal != null:
 		portal.enabled = false
 		portal.visible = false
@@ -146,6 +180,16 @@ func _zero_player_motion() -> void:
 	player.velocity = Vector3.ZERO
 	player.current_speed = 0.0
 	player.is_sprinting = false
+
+
+## 玩家死亡时保留死亡暂停，冻结隐藏面板但不清除暂停所有权之外的任何状态。
+func _freeze_for_dead_player() -> void:
+	_reward_open = false
+	_pause_owned = false
+	if reward_board == null:
+		return
+	reward_board.visible = false
+	reward_board.process_mode = Node.PROCESS_MODE_DISABLED
 
 
 func _player() -> Node3D:

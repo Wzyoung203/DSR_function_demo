@@ -11,7 +11,7 @@ const WATCHDOG_SECONDS := 30.0
 const MAX_FRAMES := 180
 const MAX_SETTLE_FRAMES := 8
 const HEAL_AMOUNT := 35.0
-const EXPECTED_CHECKS := 32
+const EXPECTED_CHECKS := 45
 
 var failures := 0
 var checks_run := 0
@@ -135,10 +135,134 @@ func _run() -> void:
 	check(not portal.enabled and not portal.visible and not portal.monitoring, "返回后传送门关闭")
 	check(not controller.return_to_tavern(), "重复返回被拒绝")
 
+	await _close_scene(scene)
+	await _check_ammo_reward_path()
+	await _check_system_progress_reward_path()
+
 	if checks_run != EXPECTED_CHECKS:
 		failures += 1
 		push_error("检查数量不符：期望 %d，实际 %d（脚本报错会中断后续检查）" % [EXPECTED_CHECKS, checks_run])
-	_finish(scene)
+	_finish(null)
+
+
+func _check_ammo_reward_path() -> void:
+	var context := await _prepare_fresh_encounter()
+	var scene: Node = context["scene"]
+	var tree: SceneTree = context["tree"]
+	var arena = context["arena"]
+	var enemy = context["enemy"]
+	var player = context["player"]
+	var board = context["board"]
+	var controller = context["controller"]
+	var portal = context["portal"]
+	var slots = player.get_node("WeaponSlots")
+
+	slots.select_slot(1)
+	slots.select_slot(0)
+	for slot in range(2):
+		var ammo_state = slots._ammo_states[slot]
+		if ammo_state != null:
+			ammo_state.magazine_rounds = 0
+			ammo_state.is_reloading = true
+	for ammo_type in slots.reserve_ammo.keys():
+		slots.reserve_ammo[ammo_type] = 0
+
+	enemy.receive_hit(10000.0)
+	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused),
+		"弹药奖励：真实清场暂停并显示面板")
+	check(controller.select_reward(&"ammo"), "弹药奖励：选择成功")
+	check(
+		slots.reserve_ammo[WeaponData.AmmoType.RIFLE] == slots.starting_rifle_ammo
+		and slots.reserve_ammo[WeaponData.AmmoType.PISTOL] == slots.starting_pistol_ammo
+		and slots.reserve_ammo[WeaponData.AmmoType.SMG] == slots.starting_smg_ammo
+		and slots.reserve_ammo[WeaponData.AmmoType.SHOTGUN] == slots.starting_shotgun_ammo,
+		"弹药奖励：四类备弹恢复初始值"
+	)
+	var magazines_refilled := true
+	for slot in range(2):
+		var data = slots._weapon_at(slot)
+		var ammo_state = slots._ammo_states[slot]
+		if data != null:
+			magazines_refilled = magazines_refilled and ammo_state != null \
+				and ammo_state.magazine_rounds == data.magazine_capacity \
+				and not ammo_state.is_reloading
+	check(magazines_refilled, "弹药奖励：已初始化弹匣补满并取消换弹")
+	check(not board.visible and not tree.paused, "弹药奖励：面板隐藏且暂停解除")
+	check(portal.enabled and portal.visible and portal.monitoring, "弹药奖励：返回传送门激活")
+	await _close_scene(scene)
+
+
+func _check_system_progress_reward_path() -> void:
+	var context := await _prepare_fresh_encounter()
+	var scene: Node = context["scene"]
+	var tree: SceneTree = context["tree"]
+	var state = context["state"]
+	var enemy = context["enemy"]
+	var board = context["board"]
+	var controller = context["controller"]
+	var portal = context["portal"]
+	var quest_label: Label = scene.get_node("QuestPanel").get_node("Panel/Margin/Content/QuestList")
+
+	enemy.receive_hit(10000.0)
+	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused),
+		"系统进度奖励：真实清场暂停并显示面板")
+	check(quest_label.text.contains("系统进度：0"), "系统进度奖励：选择前面板显示零进度")
+	check(controller.select_reward(&"system_progress"), "系统进度奖励：选择成功")
+	await tree.process_frame
+	check(int(state.get("system_progress")) == 20, "系统进度奖励：进度增加到 20")
+	check(quest_label.text.contains("系统进度：20"), "系统进度奖励：任务面板显示 20")
+	check(not board.visible and not tree.paused, "系统进度奖励：面板隐藏且暂停解除")
+	check(portal.enabled and portal.visible and portal.monitoring, "系统进度奖励：返回传送门激活")
+	await _close_scene(scene)
+
+
+func _prepare_fresh_encounter() -> Dictionary:
+	var scene: Node = MAIN_SCENE.instantiate()
+	root.add_child(scene)
+	current_scene = scene
+	var tree := scene.get_tree()
+	await tree.process_frame
+	await tree.process_frame
+
+	var state: Node = root.get_node("GameState")
+	var quests = scene.get_node("QuestController")
+	state.help_choice = ""
+	state.task_a_returned = ""
+	state.system_progress = 0
+	state.clear_interaction_state()
+	quests.reset_progress()
+	await tree.process_frame
+	await tree.process_frame
+	state.help_choice = "accepted"
+	await _wait_until(tree, func() -> bool: return quests.status_of(&"task_a") == QuestControllerScript.Status.IN_PROGRESS)
+
+	var arena = scene.get_node("Arena")
+	var player: CharacterBody3D = scene.get_node("Player")
+	var enemy: CharacterBody3D = arena.get_node("Enemy")
+	player.set_physics_process(false)
+	enemy.set_physics_process(false)
+	player.global_position = arena.to_global(Vector3(-4.0, 0.0, 0.0))
+	await _wait_physics_frames(tree, MAX_SETTLE_FRAMES)
+	scene.get_node("StageController").set_player_in_zone(&"site", true)
+	return {
+		"scene": scene,
+		"tree": tree,
+		"state": state,
+		"arena": arena,
+		"player": player,
+		"enemy": enemy,
+		"board": scene.get_node("RewardBoard"),
+		"controller": scene.get_node("EncounterController"),
+		"portal": scene.get_node("Arena/CombatZone/ReturnPortal"),
+	}
+
+
+func _close_scene(scene: Node) -> void:
+	if is_instance_valid(scene):
+		scene.get_tree().paused = false
+		scene.queue_free()
+	current_scene = null
+	await process_frame
 
 
 func _require(condition: bool, label_text: String) -> void:
