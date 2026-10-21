@@ -37,11 +37,18 @@ func _run() -> void:
 	_check("弹药奖励恢复手枪备弹", slots.reserve_ammo[WeaponData.AmmoType.PISTOL] == slots.starting_pistol_ammo)
 	_check("弹药奖励恢复冲锋枪备弹", slots.reserve_ammo[WeaponData.AmmoType.SMG] == slots.starting_smg_ammo)
 	_check("弹药奖励恢复霰弹备弹", slots.reserve_ammo[WeaponData.AmmoType.SHOTGUN] == slots.starting_shotgun_ammo)
+	var expected_reserve := {
+		WeaponData.AmmoType.RIFLE: slots.starting_rifle_ammo,
+		WeaponData.AmmoType.PISTOL: slots.starting_pistol_ammo,
+		WeaponData.AmmoType.SMG: slots.starting_smg_ammo,
+		WeaponData.AmmoType.SHOTGUN: slots.starting_shotgun_ammo,
+	}
 	for slot in range(2):
 		var data = slots._weapon_at(slot)
 		if data != null:
 			var state = slots._ammo_states[slot]
 			_check("弹药奖励补满槽%d并取消换弹" % slot, state.magazine_rounds == data.magazine_capacity and not state.is_reloading)
+			_check("弹药奖励同步已初始化槽%d备弹" % slot, state.reserve_count() == expected_reserve[data.ammo_type])
 	combat.accuracy = 0.05
 	combat.accuracy_recovery_timer = 0.6
 	combat.shot_cooldown = 0.7

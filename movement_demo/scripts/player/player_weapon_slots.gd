@@ -54,7 +54,9 @@ func _starting_reserve_ammo() -> Dictionary:
 	}
 
 func refill_all_ammo() -> void:
-	reserve_ammo = _starting_reserve_ammo()
+	# 已初始化的 WeaponAmmo 持有该字典引用，必须原地恢复。
+	reserve_ammo.clear()
+	reserve_ammo.merge(_starting_reserve_ammo())
 	for slot in range(2):
 		var data := _weapon_at(slot)
 		var state = _ammo_states[slot]
