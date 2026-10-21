@@ -34,12 +34,7 @@ func _ready() -> void:
 	for data in [primary_weapon, secondary_weapon]:
 		if data != null and data.fire_mode == WeaponData.FireMode.MELEE:
 			push_warning("玩家武器槽误配专用近战武器，该槽按空槽处理。")
-	reserve_ammo = {
-		WeaponData.AmmoType.RIFLE: starting_rifle_ammo,
-		WeaponData.AmmoType.PISTOL: starting_pistol_ammo,
-		WeaponData.AmmoType.SMG: starting_smg_ammo,
-		WeaponData.AmmoType.SHOTGUN: starting_shotgun_ammo,
-	}
+	reserve_ammo = _starting_reserve_ammo()
 	# 与出生节点就绪顺序无关；此时 Player 自己的 onready 可能尚未执行。
 	var initial: int = clampi(starting_slot, 0, 1)
 	if _weapon_at(initial) == null:
@@ -48,6 +43,25 @@ func _ready() -> void:
 		_equip_slot(initial)
 	else:
 		combat.equip_weapon(null)
+	_update_display()
+
+func _starting_reserve_ammo() -> Dictionary:
+	return {
+		WeaponData.AmmoType.RIFLE: starting_rifle_ammo,
+		WeaponData.AmmoType.PISTOL: starting_pistol_ammo,
+		WeaponData.AmmoType.SMG: starting_smg_ammo,
+		WeaponData.AmmoType.SHOTGUN: starting_shotgun_ammo,
+	}
+
+func refill_all_ammo() -> void:
+	reserve_ammo = _starting_reserve_ammo()
+	for slot in range(2):
+		var data := _weapon_at(slot)
+		var state = _ammo_states[slot]
+		if data == null or state == null:
+			continue
+		state.cancel_reload()
+		state.magazine_rounds = data.magazine_capacity
 	_update_display()
 
 func _process(_delta: float) -> void:

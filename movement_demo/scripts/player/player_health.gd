@@ -96,6 +96,15 @@ func receive_hit(damage: float) -> void:
 	_update_display()
 
 
+func heal(amount: float) -> float:
+	if is_dead or not is_finite(amount) or amount <= 0.0:
+		return 0.0
+	var previous := health
+	health = minf(max_health, health + amount)
+	_update_display()
+	return health - previous
+
+
 func is_invincible() -> bool:
 	return debug_settings.enabled
 

@@ -25,6 +25,23 @@ func _run() -> void:
 	_check("数字2切换副武器且不暂停", slots.active_slot == 1 and combat.weapon == slots.secondary_weapon and not paused)
 	_check("装备栏显示当前副武器", slots.get_node("Panel/Content/Slots/Secondary/Name").text.contains(slots.secondary_weapon.display_name))
 	_check("当前槽位有箭头高亮", slots.get_node("Panel/Content/Slots/Secondary/Name").text.begins_with("▶") and not slots.get_node("Panel/Content/Slots/Primary/Name").text.begins_with("▶"))
+	for slot in range(2):
+		var state = slots._ammo_states[slot]
+		if state != null:
+			state.magazine_rounds = 0
+			state.is_reloading = true
+	for ammo_type in slots.reserve_ammo.keys():
+		slots.reserve_ammo[ammo_type] = 0
+	slots.refill_all_ammo()
+	_check("弹药奖励恢复步枪备弹", slots.reserve_ammo[WeaponData.AmmoType.RIFLE] == slots.starting_rifle_ammo)
+	_check("弹药奖励恢复手枪备弹", slots.reserve_ammo[WeaponData.AmmoType.PISTOL] == slots.starting_pistol_ammo)
+	_check("弹药奖励恢复冲锋枪备弹", slots.reserve_ammo[WeaponData.AmmoType.SMG] == slots.starting_smg_ammo)
+	_check("弹药奖励恢复霰弹备弹", slots.reserve_ammo[WeaponData.AmmoType.SHOTGUN] == slots.starting_shotgun_ammo)
+	for slot in range(2):
+		var data = slots._weapon_at(slot)
+		if data != null:
+			var state = slots._ammo_states[slot]
+			_check("弹药奖励补满槽%d并取消换弹" % slot, state.magazine_rounds == data.magazine_capacity and not state.is_reloading)
 	combat.accuracy = 0.05
 	combat.accuracy_recovery_timer = 0.6
 	combat.shot_cooldown = 0.7
