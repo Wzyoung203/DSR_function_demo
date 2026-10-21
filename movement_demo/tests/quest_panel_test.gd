@@ -4,7 +4,7 @@ extends SceneTree
 ## 运行：godot --headless --path movement_demo --script res://tests/quest_panel_test.gd
 
 ## 断言总数；脚本报错会中断检查函数，最后用它兜住「报错却显示全绿」的假通过。
-const EXPECTED_CHECKS := 8
+const EXPECTED_CHECKS := 12
 
 var failures: int = 0
 var checks_run: int = 0
@@ -24,6 +24,7 @@ func check(condition: bool, label_text: String) -> void:
 
 
 func run_checks() -> void:
+	root.get_node("GameState").system_progress = 0
 	await _check_empty_placeholder()
 	await _check_live_scene()
 	if checks_run != EXPECTED_CHECKS:
@@ -40,15 +41,30 @@ func _check_empty_placeholder() -> void:
 	var panel: Node = load("res://scenes/ui/quest_panel.tscn").instantiate()
 	root.add_child(panel)
 	await process_frame
-	check(_text(panel) == "暂无任务", "没有任务控制器时显示占位文本")
+	check(_text(panel).contains("暂无任务"), "没有任务控制器时显示占位文本")
+	check(_text(panel).contains("系统进度：0"), "没有系统进度时显示零")
 	check(panel.is_in_group(&"quest_panel"), "面板加入 quest_panel 组")
 	var container: Control = panel.get_node("Panel")
 	check(container.mouse_filter == Control.MOUSE_FILTER_IGNORE, "面板不接收鼠标事件")
+	var state: Node = root.get_node("GameState")
+	var progress_events: Array = []
+	var record_progress := func(previous: int, current: int) -> void:
+		progress_events.append([previous, current])
+	state.system_progress_changed.connect(record_progress)
+	state.add_system_progress(20)
+	await process_frame
+	check(_text(panel).contains("系统进度：20"), "系统进度变化后刷新")
+	check(
+		progress_events == [[0, 20]],
+		"系统进度变化报告前后值"
+	)
+	state.system_progress_changed.disconnect(record_progress)
 	panel.queue_free()
 	await process_frame
 
 
 func _check_live_scene() -> void:
+	root.get_node("GameState").system_progress = 0
 	var scene: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	await process_frame
@@ -69,6 +85,9 @@ func _check_live_scene() -> void:
 	state.help_choice = "accepted"
 	await process_frame
 	check(_text(panel).contains("进行中"), "任务状态变化后面板刷新")
+	state.add_system_progress(20)
+	await process_frame
+	check(_text(panel).contains("系统进度：20"), "主场景任务栏显示系统进度")
 	scene.queue_free()
 	await process_frame
 

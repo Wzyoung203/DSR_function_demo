@@ -3,6 +3,9 @@ extends Node
 ## 对话字段被写入时通知监听者（例如任务控制器按表同步任务状态）；
 ## 值没有变化时不发信号，避免同一结果反复刷新。旗标与物品另有专用信号。
 signal value_changed(key: StringName, value: Variant)
+signal system_progress_changed(previous: int, current: int)
+
+var system_progress: int = 0
 
 # 本次运行共享的对话状态；重新运行游戏会重置。
 var talked_to_a: bool = false:
@@ -45,6 +48,14 @@ signal flag_changed(flag: StringName, value: bool)
 var items: Dictionary = {}
 ## flag -> bool
 var flags: Dictionary = {}
+
+
+func add_system_progress(amount: int) -> void:
+	if amount <= 0:
+		return
+	var previous := system_progress
+	system_progress += amount
+	system_progress_changed.emit(previous, system_progress)
 
 
 ## 拾取或获得物品；display_name 留空时保留已有名字。
