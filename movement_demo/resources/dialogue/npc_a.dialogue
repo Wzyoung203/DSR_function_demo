@@ -1,17 +1,17 @@
 ~ start
 if GameState.help_choice == "accepted"
-	A: 谢谢，你可以去找 B 了。
+	A: 竞技场里的敌人还在等你。
 	=> END
 elif GameState.help_choice == "refused"
-	A: 好的，我知道了。
+	A: 如果你想帮忙，再来找我。
 	=> END
-A: 你愿意帮忙吗？
-- 答应帮忙
+A: 竞技场里有一批敌人，能帮我去消灭他们吗？
+- 接受任务
 	$> GameState.help_choice = "accepted"
 	$> GameState.talked_to_a = true
-	A: 谢谢，你可以去找 B 了。
-- 拒绝帮忙
+	A: 谢谢。竞技场入口已解锁，消灭那里的敌人再回来。
+- 暂时拒绝
 	$> GameState.help_choice = "refused"
 	$> GameState.talked_to_a = true
-	A: 好的，我知道了。
+	A: 好的，需要帮忙时再来找我。
 => END

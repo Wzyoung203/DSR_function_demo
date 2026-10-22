@@ -5,6 +5,7 @@ extends Node
 signal value_changed(key: StringName, value: Variant)
 signal system_progress_changed(previous: int, current: int)
 
+const SYSTEM_PROGRESS_MAX: int = 100
 var system_progress: int = 0
 
 # 本次运行共享的对话状态；重新运行游戏会重置。
@@ -58,11 +59,12 @@ var flags: Dictionary = {}
 
 
 func add_system_progress(amount: int) -> void:
-	if amount <= 0:
+	if amount <= 0 or system_progress >= SYSTEM_PROGRESS_MAX:
 		return
 	var previous := system_progress
-	system_progress += amount
-	system_progress_changed.emit(previous, system_progress)
+	system_progress = mini(SYSTEM_PROGRESS_MAX, previous + amount)
+	if system_progress != previous:
+		system_progress_changed.emit(previous, system_progress)
 
 
 ## 拾取或获得物品；display_name 留空时保留已有名字。

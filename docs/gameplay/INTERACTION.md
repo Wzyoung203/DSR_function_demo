@@ -12,6 +12,7 @@
 
 ```text
 scripts/world/interactable.gd                 交互物节点（范围、提示、输入、条件、效果派发）
+scripts/world/quest_gate_reader.gd            任务状态门禁交互物，接取 A 任务后才允许操作
 scripts/world/interactions/interaction_context.gd   一次交互的注入上下文
 scripts/world/interactions/interaction_effect.gd    效果基类
 scripts/world/interactions/*_effect.gd              具体效果
@@ -30,7 +31,10 @@ scenes/ui/game_state_debug.tscn               调试面板
 | 酒杯 | 主房间南侧 | 查看 | 打开线索对话，置 `saw_wine_clue` |
 | 终端 | 主房间东侧 | 使用一次 | 打开通道信息对话，置 `terminal_read` |
 | 唱片机 | 主房间东南 | 使用，可重复 | 开／关音乐，写入 `music_playing`；接取任务前后都能操作，接取前操作不会推进任务状态 |
-| 门禁读卡器 | 通往竞技场的通道口 | 刷卡 | 缺门禁卡时提示并拒绝；持有后打开屏障并置 `arena_access` |
+| 竞技场入口 | 通往竞技场的通道口 | 打开 | 未接 A 任务时提示并拒绝；任务进行中后按 E 打开屏障并置 `arena_access` |
+
+竞技场入口读取 `QuestController.status_of("task_a")`，不要求门禁卡。门禁卡物体仍保留为独立可拾取物品，
+但不再参与竞技场开门条件。
 
 对话影响是打开交互物自己的对话资源，不动 NPC 对话；战斗影响是通道屏障决定能否进入竞技场，以及音乐声音事件进入既有听觉系统。
 

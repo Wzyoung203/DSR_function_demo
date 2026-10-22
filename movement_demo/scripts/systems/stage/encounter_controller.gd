@@ -9,6 +9,8 @@ extends Node
 @export var turnin_value: String = "returned"
 @export var heal_amount: float = 35.0
 @export var system_progress_amount: int = 20
+## 清场后等待多久再暂停并显示奖励面板；测试可缩短但不能改变默认值。
+@export var reward_delay_seconds: float = 5.0
 
 ## 场景注入点：竞技场、奖励面板、返回标记、返回传送门。
 @export var arena_path: NodePath
@@ -24,6 +26,8 @@ extends Node
 var _reward_open := false
 var _reward_selected := false
 var _pause_owned := false
+var _reward_pending := false
+var _reward_generation := 0
 
 
 func _ready() -> void:
@@ -50,7 +54,7 @@ func _bind_player_death() -> void:
 
 
 func _on_combat_cleared(region: Node) -> void:
-	if _reward_open or _reward_selected:
+	if _reward_pending or _reward_open or _reward_selected:
 		return
 	if region != arena:
 		return
@@ -62,6 +66,21 @@ func _on_combat_cleared(region: Node) -> void:
 		return
 	if reward_board == null or not reward_board.has_method(&"show_board"):
 		push_error("EncounterController: reward board is missing or does not implement show_board()")
+		return
+	_reward_pending = true
+	var generation := _reward_generation + 1
+	_reward_generation = generation
+	await get_tree().create_timer(maxf(0.0, reward_delay_seconds), true, false, true).timeout
+	if not is_inside_tree() or generation != _reward_generation:
+		return
+	_reward_pending = false
+	if _reward_open or _reward_selected:
+		return
+	if not _player_alive():
+		return
+	if _quest_status() != QuestController.Status.IN_PROGRESS:
+		return
+	if _player_zone() != &"site":
 		return
 	var tree := get_tree()
 	_reward_open = true
@@ -80,6 +99,9 @@ func _on_portal_interacted(_interactable: Node, _player: Node3D) -> void:
 
 
 func _on_player_died() -> void:
+	if _reward_pending:
+		_reward_pending = false
+		_reward_generation += 1
 	if _reward_open:
 		_freeze_for_dead_player()
 

@@ -76,14 +76,15 @@
 任务一现在不只是“进过竞技场又离开”，而是由 `EncounterController`（`scripts/systems/stage/encounter_controller.gd`）
 串起“清场 → 奖励 → 返回”：
 
-1. 玩家在酒馆经 A 对话把 `help_choice` 写为 `accepted`，任务进入进行中；前往 `Arena/CombatZone` 后进入“场地战斗”。
+1. A 的对话说明目标是消灭竞技场里的敌人。接受后 `help_choice` 写为 `accepted`，任务进入进行中并解锁竞技场入口；
+   前往 `Arena/CombatZone` 后进入“场地战斗”。
 2. 竞技场所有已注册敌人死亡时，`Arena` 发出 `combat_cleared`。控制器只在玩家存活、`task_a` 进行中且玩家在
-   `site` 区域时响应，随后把场景树暂停并显示奖励面板。
+   `site` 区域时响应；等待 5 秒后再次复核，再把场景树暂停并显示奖励面板。重复清场不会启动第二个结算。
 3. 奖励面板 `scenes/ui/reward_board.tscn`（`scripts/ui/reward_board.gd`）默认隐藏，`process_mode` 设为 ALWAYS，
    暂停时仍能处理按钮输入；每次显示只能发出一个 `reward_selected`：
    - `first_aid`：恢复 35 点生命（超过上限按上限截断）；
    - `ammo`：补满两把已装备枪械的弹匣，并把四类共享备弹恢复到各自初值；
-   - `system_progress`：给 `GameState.system_progress` 增加 20。
+   - `system_progress`：给 `GameState.system_progress` 增加 20，累计上限 100。
 4. 选定后控制器解除暂停、隐藏面板，并激活 `Arena/CombatZone/ReturnPortal`（默认关闭，位于竞技场入口附近）。
 5. 玩家交互返回传送门时，控制器把 `task_a_returned` 写为 `returned`，清零玩家移动状态，并把玩家传送到
    `TavernReturnPoint`（位于原始出生点），同时关闭传送门；重复返回会被拒绝。
@@ -132,11 +133,12 @@
 
 ## 任务面板
 
-`scenes/ui/quest_panel.tscn` + `scripts/ui/quest_panel.gd` 挂在 `main.tscn` 上，屏幕左上角常驻显示，
-半透明样式与调试面板一致，鼠标事件忽略、不抢对话与交互按键。面板只读任务控制器：
+`scenes/ui/quest_panel.tscn` + `scripts/ui/quest_panel.gd` 挂在 `main.tscn` 上，默认隐藏，按 Tab 显示或隐藏。
+面板半透明、鼠标事件忽略；Tab 使用运行时输入动作绑定，不依赖 `project.godot` 中的输入条目。面板只读任务控制器和状态节点：
 
 - 一行一个任务，格式“任务名：状态”，`target_area` 非空时附“（场地 xxx）”；
 - 未解锁显示“未解锁”，配置表为空时显示“暂无任务”；
+- 系统进度使用最大值 100 的 `ProgressBar`，并显示“当前值 / 100”；
 - 监听 `quest_changed` 刷新，并在启动时延迟补刷一次，兜住控制器晚接线。
 
 左侧调试面板（`GameStateDebug`）已下移，避免与任务面板重叠。
@@ -216,12 +218,12 @@ macOS 上用 `Godot.app/Contents/MacOS/Godot` 替换可执行文件路径。
 - `stage_system_test.gd`：阶段判定的全部转移与次序、拒绝与接取的区分、失效处理、规则匹配与覆盖顺序、
   开关关闭／打开的行为差异、快照字段、记录内容与去重信号，并在最后加载真实 `main.tscn` 检查控制器、
   区域绑定、`npc_id` 对应与“默认不落表现”。
-- `quest_panel_test.gd`：面板列出全部任务与状态、随 `quest_changed` 刷新、空表占位、不接收鼠标、
-  真实 `main.tscn` 里能找到面板与控制器。
+- `quest_panel_test.gd`：面板默认隐藏、Tab 显示／隐藏、百点系统进度条、任务状态刷新、空表占位、不接收鼠标，
+  以及真实 `main.tscn` 里的面板与控制器。
 - `record_player_quest_test.gd`：接取前后都能操作唱片机、接取前操作不推进任务状态、
   关闭状态下交差失败、重新打开后点“交差”完成任务、拒绝只改对话不改任务状态且可重新接取，
   以及任务面板显示对应状态。
-- `quest_encounter_loop_test.gd`：真实主场景端到端验证任务一闭环——接取、进入竞技场、真实敌人死亡后暂停并显示
+- `quest_encounter_loop_test.gd`：真实主场景端到端验证任务一闭环——接取、进入竞技场、真实敌人死亡后等待 5 秒再暂停并显示
   奖励面板、三选一奖励、重复选择被拒、奖励后面板隐藏且传送门激活、经传送门返回写入 `task_a_returned`、
   传送到 `TavernReturnPoint`、任务完成且阶段进入 `RETURNED`、任务面板显示系统进度。
 

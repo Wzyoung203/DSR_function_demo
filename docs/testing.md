@@ -21,7 +21,7 @@ python movement_demo/tests/run_regressions.py --godot E:/Godot/Godot_v4.7.2-stab
 
 | 分组 | 内容与清单来源 |
 | --- | --- |
-| `systems` | 移动、奔跑、NPC 交互、听觉、声音模式、Debug、表现接口／复位、对话文件扫描，以及任务条件、任务状态、阶段接线、任务面板和唱片机支线；由统一入口登记。可选交互物原型测试仅在本地文件存在时加入 |
+| `systems` | 移动、奔跑、NPC 交互、听觉、声音模式、Debug、表现接口／复位、对话文件扫描，以及任务条件、任务状态、阶段接线、任务面板、唱片机支线、竞技场清场、奖励板和任务战斗闭环；由统一入口登记。可选交互物原型测试仅在本地文件存在时加入 |
 | `combat` | `tests/run_combat_regressions.py` 的原玩家战斗清单 |
 | `enemy` | `tests/enemy/run_enemy_regressions.py` 的原敌人清单 |
 

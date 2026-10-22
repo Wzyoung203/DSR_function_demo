@@ -31,6 +31,7 @@ movement_demo/
 │   ├── player/            玩家移动、战斗、生命和武器槽
 │   ├── weapons/           武器数据与弹药执行
 │   ├── world/             掩体、训练靶、区域、门、NPC、交互物与屏障
+│   │   ├── quest_gate_reader.gd  按任务进行中状态放行的门禁交互物
 │   │   └── interactions/  交互效果基类、注入上下文与各效果实现
 │   ├── ui/                对话界面、锁定准星、任务面板与奖励面板
 │   ├── debug/             调试开关、声音和攻击点预览
@@ -111,9 +112,11 @@ Spatial 的路线样本层仅在同步候选比较中复用同路径已实际观
 
 支援时序查询由 Context `cooperation_support_snapshot()` 接入区域 `enemy_cooperation.gd` 的精简 `support_snapshot()`；区域与完整快照共用实时资格、新鲜度及火力检查，精简读取不复制无关成员、身体、威胁和声明字段。`squad_coordination.gd` 仍持有任务并补齐有效请求，以静止／可移动两类最长覆盖计算压力。Context 只沿用既有候选预览观察，不新增缓存生命周期或调度节点。`enemy_cooperation_query_test.gd` 对照原完整快照算法，验证状态失效、不同目标、只读投影、声明与接受计划的期限。
 
-战斗遭遇闭环由 `scripts/systems/stage/encounter_controller.gd` 承担：监听竞技场 `combat_cleared`，暂停并打开奖励面板，分发急救包／弹药／系统进度三种奖励，激活返回传送门，并在玩家交互传送门时写入 `task_a_returned`、把玩家传送到 `TavernReturnPoint`。它只读 `QuestController`／`StageController` 的查询接口，不改任务与阶段的权威判定。
+战斗遭遇闭环由 `scripts/systems/stage/encounter_controller.gd` 承担：监听竞技场 `combat_cleared`，等待默认 5 秒后暂停并打开奖励面板，分发急救包／弹药／系统进度三种奖励，激活返回传送门，并在玩家交互传送门时写入 `task_a_returned`、把玩家传送到 `TavernReturnPoint`。它只读 `QuestController`／`StageController` 的查询接口，不改任务与阶段的权威判定。
 
 奖励面板 `scenes/ui/reward_board.tscn` + `scripts/ui/reward_board.gd` 是默认隐藏的三选一界面；`process_mode` 设为 ALWAYS，因此场景树暂停时仍能处理输入，每次显示只允许发出一个 `reward_selected`。面板本身不写玩家、弹药或进度，只回传所选奖励 id 给遭遇控制器。对应测试有 `tests/quest_encounter_loop_test.gd`（端到端闭环）和 `tests/reward_board_test.gd`（面板单次选择）。
+
+`scripts/world/quest_gate_reader.gd` 是竞技场入口的任务条件交互物：只读 `QuestController`，`task_a` 进行中时才允许原有开门效果；门禁卡不再参与该入口条件。任务面板默认隐藏，Tab 切换，系统进度以 0～100 进度条显示。
 
 `docs/enemy-ai.md` 是敌人结构、维护和使用部署说明；`docs/gameplay/` 保留移动、武器、掩体等专项说明，`docs/TODO.md` 记录后续方向，`docs/superpowers/` 保存仍有价值的设计与验收记录。第三方插件自带文档留在插件目录，以保留其使用说明和许可。
 

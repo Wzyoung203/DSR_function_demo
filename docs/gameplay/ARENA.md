@@ -1,6 +1,8 @@
 # 竞技场配置与试玩
 
-`scenes/main.tscn` 实例化 `scenes/arena.tscn`。敌人在 `Arena/Enemy`，玩家进入区域后启用 AI，离场按区域规则复位。当前敌人结构与战术勾选见 [敌人模块化 AI](../enemy-ai.md)。
+`scenes/main.tscn` 实例化 `scenes/arena.tscn`。当前敌人在 `Arena/Squad/Enemy`，玩家进入区域后启用 AI，离场按区域规则复位。当前敌人结构与战术勾选见 [敌人模块化 AI](../enemy-ai.md)。
+
+竞技场入口由 `Interactables/AccessGate/Reader` 控制：未接取 A 的 `task_a` 时显示阻断提示，任务进行中后才允许按 E 打开屏障；门禁卡不再参与该入口条件。清空敌人后等待默认 5 秒显示奖励面板，完整流程见 [阶段与任务](STAGE_STATE.md)。
 
 ## 编辑场景
 

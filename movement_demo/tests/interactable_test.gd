@@ -3,6 +3,8 @@ extends SceneTree
 ## 场景交互物检查：输入守卫、条件、效果、实例结果与解耦注入。
 ## 运行：godot --headless --path movement_demo --script res://tests/interactable_test.gd
 
+const QuestControllerScript := preload("res://scripts/systems/stage/quest_controller.gd")
+
 var failures: int = 0
 
 
@@ -88,6 +90,8 @@ func run_checks() -> void:
 	player.set_physics_process(false)
 	var state = root.get_node("GameState")
 	var ui = scene.get_node("DialogueUI")
+	var npc_a = scene.get_node("NPC")
+	var quests = scene.get_node("QuestController")
 	var keycard = scene.get_node("Interactables/Keycard") as Interactable
 	var wine = scene.get_node("Interactables/WineGlass") as Interactable
 	var terminal = scene.get_node("Interactables/Terminal") as Interactable
@@ -135,13 +139,35 @@ func run_checks() -> void:
 	check(not terminal.has_interacted, "对话中按 E 不触发交互物")
 	await finish_dialogue(ui)
 
-	# 条件交互：缺门禁卡时读卡器拒绝，屏障保持关闭。
+	# 门禁条件：未接取 A 的任务时拒绝，接取后才允许打开。
 	stand_at(player, reader)
 	await settle()
-	check(reader.prompt.visible and reader.prompt.text == "需要门禁卡", "缺条件时显示阻断提示")
-	check(press_key(KEY_E), "缺条件时仍消费按键")
-	check(not barrier.is_open, "缺门禁卡时屏障不打开")
-	check(not state.is_flag_set(&"arena_access"), "缺门禁卡时不置位通行旗标")
+	check(reader.prompt.visible and reader.prompt.text == "需要先接取 A 的任务", "未接任务时显示门禁阻断提示")
+	check(press_key(KEY_E), "未接任务时仍消费按键")
+	check(not barrier.is_open, "未接任务时屏障不打开")
+	check(not state.is_flag_set(&"arena_access"), "未接任务时不置位通行旗标")
+
+	await ui.open_dialogue(player, npc_a.dialogue_resource, "start")
+	await settle()
+	check(ui.dialogue_text.text.contains("竞技场"), "A 的对话说明竞技场目标")
+	var accept_index := _choice_index(ui, "接受任务")
+	check(accept_index >= 0, "A 的任务提供接受选项")
+	if accept_index >= 0:
+		ui.choices.get_child(accept_index).pressed.emit()
+		await settle()
+		await settle()
+	check(state.help_choice == "accepted", "接受 A 的任务写入接取状态")
+	check(quests.status_of(&"task_a") == QuestControllerScript.Status.IN_PROGRESS, "接受后任务进入进行中")
+	ui._close_dialogue()
+	await settle()
+
+	stand_at(player, reader)
+	await settle()
+	check(reader.prompt.text == "E 打开 竞技场入口", "接取任务后门禁变为可打开")
+	check(press_key(KEY_E), "接取任务后按 E 打开竞技场入口")
+	check(barrier.is_open, "接取任务后屏障打开")
+	check(state.is_flag_set(&"arena_access"), "接取任务后置位通行旗标")
+	check(not state.has_item(&"keycard"), "开门不要求门禁卡")
 
 	# 拾取门禁卡。
 	stand_at(player, keycard)
@@ -151,14 +177,6 @@ func run_checks() -> void:
 	check(state.has_item(&"keycard") and state.get_item_count(&"keycard") == 1, "门禁卡写入物品栏")
 	check(not keycard.visible, "拾取后交互物隐藏")
 	check(not keycard.can_interact(player), "拾取后不再重复触发")
-
-	# 满足条件后读卡器放行。
-	stand_at(player, reader)
-	await settle()
-	check(reader.prompt.text == "E 刷卡 门禁读卡器", "满足条件后显示可交互提示")
-	check(press_key(KEY_E), "持卡刷卡")
-	check(barrier.is_open, "持卡后屏障打开")
-	check(state.is_flag_set(&"arena_access"), "持卡后置位通行旗标")
 
 	# 唱片机：接取任务前后都能操作，重复使用在开／关之间切换。
 	stand_at(player, record)
@@ -205,3 +223,10 @@ func run_checks() -> void:
 	scene.free()
 	print("Interactable checks finished; failures: ", failures)
 	quit(1 if failures else 0)
+
+
+func _choice_index(ui, keyword: String) -> int:
+	for index in ui.choices.get_child_count():
+		if ui.choices.get_child(index).text.contains(keyword):
+			return index
+	return -1

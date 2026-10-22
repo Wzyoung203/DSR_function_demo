@@ -12,7 +12,7 @@ const WATCHDOG_SECONDS := 30.0
 const MAX_FRAMES := 180
 const MAX_SETTLE_FRAMES := 8
 const HEAL_AMOUNT := 35.0
-const EXPECTED_CHECKS := 45
+const EXPECTED_CHECKS := 48
 
 var failures := 0
 var checks_run := 0
@@ -58,9 +58,12 @@ func _run() -> void:
 	_require(return_point != null, "TavernReturnPoint 已挂载")
 	_require(portal != null, "ReturnPortal 已挂载")
 	_require(_has_property(state, "task_a_returned"), "GameState.task_a_returned 字段存在")
+	_require(_has_property(controller, "reward_delay_seconds"), "遭遇控制器提供奖励延迟")
 	if failures > 0 or controller == null or reward_board == null or return_point == null or portal == null or not _has_property(state, "task_a_returned"):
 		_finish(scene)
 		return
+	check(is_equal_approx(float(controller.get("reward_delay_seconds")), 5.0), "奖励默认等待五秒")
+	controller.set("reward_delay_seconds", 0.05)
 
 	player.set_physics_process(false)
 	enemy.set_physics_process(false)
@@ -97,14 +100,17 @@ func _run() -> void:
 	var health_before_reward: float = health_node.health
 
 	enemy.receive_hit(10000.0)
+	check(not reward_board.visible and not tree.paused, "敌人死亡后五秒内不显示奖励面板")
 	_check(await _wait_until(tree, func() -> bool: return reward_board.visible and tree.paused),
-		"真实敌人死亡后暂停并显示奖励面板")
+		"等待结束后暂停并显示奖励面板")
 
 	var reward_ids: Array = reward_board.REWARD_IDS
 	check(reward_ids.size() == 3 and reward_ids[0] == &"first_aid" and reward_ids[1] == &"ammo" and reward_ids[2] == &"system_progress",
 		"奖励面板提供三项选择")
-	var quest_label: Label = scene.get_node("QuestPanel").get_node("Panel/Margin/Content/QuestList")
-	check(quest_label.text.contains("系统进度：0"), "任务面板显示零进度")
+	var progress_bar: ProgressBar = scene.get_node("QuestPanel/Panel/Margin/Content/SystemProgress/Bar")
+	var progress_label: Label = scene.get_node("QuestPanel/Panel/Margin/Content/SystemProgress/Label")
+	check(progress_bar.max_value == 100.0 and progress_bar.value == 0.0 and progress_label.text.contains("0 / 100"),
+		"任务面板显示零进度和百点上限")
 
 	_check(controller.select_reward(&"first_aid"), "选择急救包奖励成功")
 	_check(is_equal_approx(health_node.health, minf(health_node.max_health, health_before_reward + HEAL_AMOUNT)),
@@ -202,16 +208,17 @@ func _check_system_progress_reward_path() -> void:
 	var board = context["board"]
 	var controller = context["controller"]
 	var portal = context["portal"]
-	var quest_label: Label = scene.get_node("QuestPanel").get_node("Panel/Margin/Content/QuestList")
+	var progress_bar: ProgressBar = scene.get_node("QuestPanel/Panel/Margin/Content/SystemProgress/Bar")
+	var progress_label: Label = scene.get_node("QuestPanel/Panel/Margin/Content/SystemProgress/Label")
 
 	enemy.receive_hit(10000.0)
 	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused),
 		"系统进度奖励：真实清场暂停并显示面板")
-	check(quest_label.text.contains("系统进度：0"), "系统进度奖励：选择前面板显示零进度")
+	check(progress_bar.value == 0.0 and progress_label.text.contains("0 / 100"), "系统进度奖励：选择前面板显示零进度")
 	check(controller.select_reward(&"system_progress"), "系统进度奖励：选择成功")
 	await tree.process_frame
 	check(int(state.get("system_progress")) == 20, "系统进度奖励：进度增加到 20")
-	check(quest_label.text.contains("系统进度：20"), "系统进度奖励：任务面板显示 20")
+	check(progress_bar.value == 20.0 and progress_label.text.contains("20 / 100"), "系统进度奖励：任务面板显示 20 / 100")
 	check(not board.visible and not tree.paused, "系统进度奖励：面板隐藏且暂停解除")
 	check(portal.enabled and portal.visible and portal.monitoring, "系统进度奖励：返回传送门激活")
 	await _close_scene(scene)
@@ -227,6 +234,7 @@ func _prepare_fresh_encounter() -> Dictionary:
 
 	var state: Node = root.get_node("GameState")
 	var quests = scene.get_node("QuestController")
+	scene.get_node("EncounterController").set("reward_delay_seconds", 0.05)
 	state.help_choice = ""
 	state.task_a_returned = ""
 	state.system_progress = 0

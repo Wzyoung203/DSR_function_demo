@@ -75,8 +75,7 @@ func _check_dead_player_reward() -> void:
 	var state = context["state"]
 
 	context["arena"].combat_cleared.emit(context["arena"])
-	await tree.process_frame
-	check(board.visible and tree.paused, "死亡场景前奖励面板已暂停打开")
+	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused), "死亡场景前奖励面板已暂停打开")
 	health.receive_hit(1000.0)
 	check(player.is_dead(), "真实伤害使玩家死亡")
 	check(not board.visible, "死亡后立即隐藏奖励面板")
@@ -104,8 +103,7 @@ func _check_non_owner_pause() -> void:
 	var health_before: float = health.health
 	tree.paused = true
 	context["arena"].combat_cleared.emit(context["arena"])
-	await tree.process_frame
-	check(board.visible and tree.paused, "外部暂停时奖励面板可安全显示")
+	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused), "外部暂停时奖励面板可安全显示")
 	check(controller.select_reward(&"first_aid"), "外部暂停不影响存活玩家选择奖励")
 	check(health.health > health_before, "外部暂停时奖励效果正常结算")
 	check(not board.visible, "外部暂停时选择后面板隐藏")
@@ -126,8 +124,7 @@ func _check_missing_return_player() -> void:
 	var portal = context["portal"]
 
 	context["arena"].combat_cleared.emit(context["arena"])
-	await tree.process_frame
-	check(board.visible and tree.paused, "缺少返回玩家前奖励面板正常打开")
+	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused), "缺少返回玩家前奖励面板正常打开")
 	check(controller.select_reward(&"first_aid"), "缺少返回玩家前奖励可正常选择")
 	player.remove_from_group(&"player")
 	check(not controller.return_to_tavern(), "缺少玩家时拒绝返回酒馆")
@@ -148,8 +145,7 @@ func _check_missing_return_marker() -> void:
 	var portal = context["portal"]
 
 	context["arena"].combat_cleared.emit(context["arena"])
-	await tree.process_frame
-	check(board.visible and tree.paused, "缺少返回标记前奖励面板正常打开")
+	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused), "缺少返回标记前奖励面板正常打开")
 	check(controller.select_reward(&"first_aid"), "缺少返回标记前奖励可正常选择")
 	controller.return_point = null
 	check(not controller.return_to_tavern(), "缺少返回标记时拒绝返回酒馆")
@@ -169,6 +165,7 @@ func _prepare_encounter() -> Dictionary:
 
 	var state: Node = root.get_node("GameState")
 	var quests = scene.get_node("QuestController")
+	scene.get_node("EncounterController").set("reward_delay_seconds", 0.0)
 	state.help_choice = ""
 	state.task_a_returned = ""
 	state.system_progress = 0
