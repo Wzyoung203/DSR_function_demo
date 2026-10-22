@@ -33,6 +33,9 @@
 [ext_resource type="Script" path="res://scripts/systems/camera_ground_anchor.gd" id="camera_anchor"]
 [ext_resource type="Script" path="res://scripts/systems/player_camera.gd" id="player_camera"]
 [ext_resource type="PackedScene" path="res://scenes/world/camera_occlusion_demo.tscn" id="camera_occlusion_demo"]
+[ext_resource type="PackedScene" path="res://scenes/ui/reward_board.tscn" id="28_reward_board"]
+[ext_resource type="PackedScene" path="res://scenes/world/interactable.tscn" id="29_interactable"]
+[ext_resource type="Script" uid="uid://dxjjmttkvs4gf" path="res://scripts/systems/stage/encounter_controller.gd" id="30_encounter_controller"]
 
 [sub_resource type="Environment" id="Environment"]
 background_mode = 1
@@ -122,6 +125,11 @@ height = 1.75
 [node name="DialogueUI" parent="." unique_id=36702053 instance=ExtResource("1_7mycd")]
 
 [node name="QuestPanel" parent="." instance=ExtResource("27_quest_panel")]
+
+[node name="RewardBoard" parent="." instance=ExtResource("28_reward_board")]
+
+[node name="TavernReturnPoint" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 3.423183)
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1879990490]
 environment = SubResource("Environment")
@@ -327,6 +335,15 @@ script = ExtResource("impact_receiver")
 [node name="Arena" parent="." unique_id=930605498 instance=ExtResource("11_efxa6")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0, 0)
 
+[node name="ReturnPortal" parent="Arena/CombatZone" instance=ExtResource("29_interactable")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -7, 0, 0)
+visible = false
+enabled = false
+monitoring = false
+interact_id = &"arena_return"
+display_name = "酒馆"
+verb = "返回"
+
 [node name="GameStateDebug" parent="." instance=ExtResource("16_state_debug")]
 
 [node name="Interactables" type="Node3D" parent="."]
@@ -371,3 +388,10 @@ stage_table = ExtResource("25_stage_table")
 
 [node name="CameraOcclusionDemo" parent="." instance=ExtResource("camera_occlusion_demo")]
 position = Vector3(-3.8, 0, 0.8)
+
+[node name="EncounterController" type="Node" parent="."]
+script = ExtResource("30_encounter_controller")
+arena_path = NodePath("../Arena")
+reward_board_path = NodePath("../RewardBoard")
+return_point_path = NodePath("../TavernReturnPoint")
+portal_path = NodePath("../Arena/CombatZone/ReturnPortal")

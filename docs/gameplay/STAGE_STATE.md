@@ -24,7 +24,7 @@
 | 每个任务的运行状态 | `QuestController` | `StageController` 只调用 `status_of(quest_id)` |
 | 阶段序号与环节 | `StageController` | `QuestController` 只调用 `get_stage_index()`，用来判解锁／失效窗口 |
 
-- 任务控制器不监听 `phase_changed`，「离开场地即完成」由任务自己的区域条件表达，不是靠阶段变化触发。
+- 任务控制器不监听 `phase_changed`；`task_a` 完成由 `task_a_returned` 状态字段驱动（见下文“任务一的奖励与返回闭环”），不是靠阶段变化触发。
 - 任务控制器订阅阶段控制器的只读广播 `stage_changed` 来重算窗口；阶段控制器订阅 `quest_changed` 来重推阶段。
   两边都只读值、不调用对方的行为，重算幂等且只在值变化时广播，所以不会来回震荡。
 - `StageStateController` 只负责把同一张配置表分发给两个控制器，不再做「任务监听阶段」这类接线。
@@ -70,6 +70,29 @@
 `key` 留空的条件视为不满足。区域与交互用“曾经”语义：一次进入或交互即长期成立；因为任务状态不回退，
 效果上等于“首次触发”。条件每次在下列事件后重新评估：状态字段变化、拾取物品、旗标变化、
 交互物报告交互、区域进出、阶段变化、换表。
+
+## 任务一的奖励与返回闭环
+
+任务一现在不只是“进过竞技场又离开”，而是由 `EncounterController`（`scripts/systems/stage/encounter_controller.gd`）
+串起“清场 → 奖励 → 返回”：
+
+1. 玩家在酒馆经 A 对话把 `help_choice` 写为 `accepted`，任务进入进行中；前往 `Arena/CombatZone` 后进入“场地战斗”。
+2. 竞技场所有已注册敌人死亡时，`Arena` 发出 `combat_cleared`。控制器只在玩家存活、`task_a` 进行中且玩家在
+   `site` 区域时响应，随后把场景树暂停并显示奖励面板。
+3. 奖励面板 `scenes/ui/reward_board.tscn`（`scripts/ui/reward_board.gd`）默认隐藏，`process_mode` 设为 ALWAYS，
+   暂停时仍能处理按钮输入；每次显示只能发出一个 `reward_selected`：
+   - `first_aid`：恢复 35 点生命（超过上限按上限截断）；
+   - `ammo`：补满两把已装备枪械的弹匣，并把四类共享备弹恢复到各自初值；
+   - `system_progress`：给 `GameState.system_progress` 增加 20。
+4. 选定后控制器解除暂停、隐藏面板，并激活 `Arena/CombatZone/ReturnPortal`（默认关闭，位于竞技场入口附近）。
+5. 玩家交互返回传送门时，控制器把 `task_a_returned` 写为 `returned`，清零玩家移动状态，并把玩家传送到
+   `TavernReturnPoint`（位于原始出生点），同时关闭传送门；重复返回会被拒绝。
+6. 配置表里 `task_a` 的完成条件因此是 `task_a_returned == returned`（`STATE_FIELD`），写入后任务完成，
+   阶段进入 `RETURNED`（返回结算）。
+
+这是同场景内的传送模拟：酒馆与竞技场都在 `main.tscn` 里，`ReturnPortal` 和 `TavernReturnPoint` 只是同一场景中的
+两个位置，并未加载独立场景。真正的跨场景出发／返回仍属于后续工作。`system_progress` 目前也只累计并显示在任务面板上，
+尚未用于章节解锁或后续内容门槛。
 
 ## 阶段窗口
 
@@ -160,7 +183,8 @@
 模板里已按现状填了两个任务：
 
 - `task_a`（帮 A 的忙）：接取 `help_choice == accepted`，拒绝 `help_choice == refused`，
-  完成＝曾进入 `arena` 且曾离开 `arena`（等价于原来的“离开场地返回结算”）。
+  完成＝`task_a_returned == returned`（由上述 `EncounterController` 经返回传送门写入，
+  等价于原来的“离开场地返回结算”，但以真实返回作为判定）。
 - `task_music`（打开唱片机，阶段一内的支线，不占阶段序号）：接取 `music_quest_choice == accepted`，
   完成＝`music_quest_turnin == done` **且** `music_playing` 为真。所以交差时唱片机被关掉就不会完成，
   重新打开再交差才会完成；没接取时完成条件根本不参与评估。
@@ -181,6 +205,7 @@
 & E:/Godot/Godot_v4.7.2-stable_win64_console.exe --headless --path movement_demo --script res://tests/stage_system_test.gd
 & E:/Godot/Godot_v4.7.2-stable_win64_console.exe --headless --path movement_demo --script res://tests/quest_panel_test.gd
 & E:/Godot/Godot_v4.7.2-stable_win64_console.exe --headless --path movement_demo --script res://tests/record_player_quest_test.gd
+& E:/Godot/Godot_v4.7.2-stable_win64_console.exe --headless --path movement_demo --script res://tests/quest_encounter_loop_test.gd
 ```
 
 macOS 上用 `Godot.app/Contents/MacOS/Godot` 替换可执行文件路径。
@@ -196,8 +221,13 @@ macOS 上用 `Godot.app/Contents/MacOS/Godot` 替换可执行文件路径。
 - `record_player_quest_test.gd`：接取前后都能操作唱片机、接取前操作不推进任务状态、
   关闭状态下交差失败、重新打开后点“交差”完成任务、拒绝只改对话不改任务状态且可重新接取，
   以及任务面板显示对应状态。
+- `quest_encounter_loop_test.gd`：真实主场景端到端验证任务一闭环——接取、进入竞技场、真实敌人死亡后暂停并显示
+  奖励面板、三选一奖励、重复选择被拒、奖励后面板隐藏且传送门激活、经传送门返回写入 `task_a_returned`、
+  传送到 `TavernReturnPoint`、任务完成且阶段进入 `RETURNED`、任务面板显示系统进度。
 
 ## 后续
 
-多份配置表的分发、任务二的场地与内容、酒馆场景整体变化、真正的场景切换都还没做；
-进度持久化本轮也未做（场景重开后已完成会退回），都记录在 [待办](../TODO.md)。
+多份配置表的分发、任务二的场地与内容、酒馆场景整体变化、真正的跨场景切换都还没做；
+当前“酒馆 ↔ 竞技场”往返由同场景内的 `ReturnPortal` 与 `TavernReturnPoint` 传送模拟。
+进度持久化本轮也未做（场景重开后已完成会退回），`system_progress` 只累计并显示、未用于章节门槛，
+都记录在 [待办](../TODO.md)。

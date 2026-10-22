@@ -105,6 +105,11 @@ func restore_health(amount: float) -> float:
 	return restored
 
 
+## 奖励等其他系统的恢复入口；与医疗包共用同一生命结算。
+func heal(amount: float) -> float:
+	return restore_health(amount)
+
+
 func is_invincible() -> bool:
 	return debug_settings.enabled
 

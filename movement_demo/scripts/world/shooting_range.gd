@@ -1,6 +1,7 @@
 extends Node3D
 
 signal presentation_reset(region: Node)
+signal combat_cleared(region: Node)
 
 ## Match members by faction and communication group; only team awareness is shared.
 @export var team_cooperation_bindings: Array[EnemyTeamCooperationBinding] = []
@@ -10,6 +11,7 @@ var enemies: Array[CharacterBody3D] = []
 var _combat_zone: Area3D
 var tactical_map = preload("res://scripts/enemy/services/enemy_tactical_map.gd").new()
 var cooperation = preload("res://scripts/enemy/services/enemy_cooperation.gd").new()
+var _encounter_cleared: bool = false
 
 
 func enemy_environment() -> Dictionary:
@@ -23,9 +25,15 @@ func enemy_environment() -> Dictionary:
 func register_enemy(enemy: CharacterBody3D) -> void:
 	if not enemies.has(enemy):
 		enemies.append(enemy)
+	var died_callback := Callable(self, "_on_enemy_died")
+	if enemy.has_signal("died") and not enemy.is_connected("died", died_callback):
+		enemy.connect("died", died_callback)
 
 
 func unregister_enemy(enemy: CharacterBody3D) -> void:
+	var died_callback := Callable(self, "_on_enemy_died")
+	if enemy.has_signal("died") and enemy.is_connected("died", died_callback):
+		enemy.disconnect("died", died_callback)
 	enemies.erase(enemy)
 	cooperation.unregister(enemy.get_instance_id())
 
@@ -41,6 +49,7 @@ func _physics_process(delta: float) -> void:
 		if is_instance_valid(player) and not player.is_dead() and not player.is_in_dialogue:
 			cooperation.advance(delta)
 			break
+	_check_combat_cleared()
 
 
 func _bind_combat_zone() -> void:
@@ -75,6 +84,7 @@ func _on_player_exited(body: Node3D) -> void:
 func _reset_targets() -> void:
 	cooperation.reset()
 	tactical_map.reset()
+	_encounter_cleared = false
 	presentation_reset.emit(self)
 	# 直接子靶与注册的嵌套敌人去重，只刷新本区域。
 	var targets: Array[Node] = []
@@ -87,6 +97,25 @@ func _reset_targets() -> void:
 		if target.is_inside_tree() and target.has_method("reset_target"):
 			target.reset_target()
 
-
 func _exit_tree() -> void:
 	tactical_map.release()
+
+
+func _on_enemy_died() -> void:
+	_check_combat_cleared()
+
+
+func _check_combat_cleared() -> void:
+	if _encounter_cleared or players_inside.is_empty():
+		return
+	var registered_enemies: Array[CharacterBody3D] = []
+	for enemy in enemies:
+		if is_instance_valid(enemy) and enemy.is_inside_tree():
+			registered_enemies.append(enemy)
+	if registered_enemies.is_empty():
+		return
+	for enemy in registered_enemies:
+		if not enemy.get("is_dead"):
+			return
+	_encounter_cleared = true
+	combat_cleared.emit(self)
