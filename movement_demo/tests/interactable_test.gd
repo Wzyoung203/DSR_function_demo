@@ -150,10 +150,22 @@ func run_checks() -> void:
 	await ui.open_dialogue(player, npc_a.dialogue_resource, "start")
 	await settle()
 	check(ui.dialogue_text.text.contains("竞技场"), "A 的对话说明竞技场目标")
-	var accept_index := _choice_index(ui, "接受任务")
-	check(accept_index >= 0, "A 的任务提供接受选项")
-	if accept_index >= 0:
-		ui.choices.get_child(accept_index).pressed.emit()
+	var refuse_index := _choice_index(ui, "暂时拒绝")
+	check(refuse_index >= 0, "A 的任务提供拒绝选项")
+	if refuse_index >= 0:
+		ui.choices.get_child(refuse_index).pressed.emit()
+		await settle()
+		await settle()
+	check(state.help_choice == "refused", "拒绝 A 后写入拒绝状态")
+	ui._close_dialogue()
+	await settle()
+
+	await ui.open_dialogue(player, npc_a.dialogue_resource, "start")
+	await settle()
+	var reaccept_index := _choice_index(ui, "我改主意了")
+	check(reaccept_index >= 0, "拒绝后 A 重新提供任务入口")
+	if reaccept_index >= 0:
+		ui.choices.get_child(reaccept_index).pressed.emit()
 		await settle()
 		await settle()
 	check(state.help_choice == "accepted", "接受 A 的任务写入接取状态")
