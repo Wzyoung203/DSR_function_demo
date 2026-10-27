@@ -19,6 +19,7 @@ scripts/world/interactions/interaction_effect.gd    效果基类
 scripts/world/interactions/*_effect.gd              具体效果
 scenes/world/interactable.tscn                可复用交互物场景
 scenes/world/objects/quest_portal.tscn        酒馆门口的任务传送门
+scenes/world/objects/tavern_return_portal.tscn 第一关完成后的返回传送门
 scenes/world/objects/                         各个具体交互物场景
 scenes/ui/game_state_debug.tscn               调试面板
 ```
@@ -33,10 +34,14 @@ scenes/ui/game_state_debug.tscn               调试面板
 | 终端 | 主房间东侧 | 使用一次 | 打开通道信息对话，置 `terminal_read` |
 | 唱片机 | 主房间东南 | 使用，可重复 | 开／关音乐，写入 `music_playing`；接取任务前后都能操作，接取前操作不会推进任务状态 |
 | 关卡传送门 | 酒馆东侧门口 | 进入 | 未接 A 任务时提示并拒绝；任务进行中后按 E 切换到第1关 |
+| 酒馆返回传送门 | 第一关出生点附近 | 返回 | 第一关清空后出现；交互写入 `task_a_returned=returned` 并返回酒馆 |
 
 关卡传送门读取 `QuestController.status_of("task_a")`，不读取物品或自行修改任务状态。目标场景由
 `ChangeSceneEffect.scene_path` 配置，`quest_portal.tscn` 指向第1关。效果通过共享 `SceneTransition` 切换，
 切换前恢复中性 `World3D` 回退环境，防止目标关卡沿用酒馆的环境光。
+
+第一关返回传送门默认隐藏，由 `LevelFlow` 在本关波次全部完成后启用。效果依次用 `SetStateValueEffect` 写入任务交差字段，
+再用 `ChangeSceneEffect` 返回酒馆；酒馆的任务控制器据此把任务 A 判为已完成。
 
 对话影响是打开交互物自己的对话资源，不动 NPC 对话；音乐声音事件继续进入既有听觉系统。
 
@@ -45,8 +50,8 @@ scenes/ui/game_state_debug.tscn               调试面板
 1. 实例化 `scenes/world/interactable.tscn`，或复制 `scenes/world/objects/` 下的一个物体场景。
 2. 设置 `display_name`、`verb` 与外观网格；需要条件时填 `required_items`、`required_flags` 和 `blocked_hint`。
 3. 在 `effects` 里加效果资源。常用组合：拾取用 `GiveItemEffect`，信息用 `ShowDialogueEffect`，
-   单次写入用 `SetFlagEffect`，开／关切换用 `ToggleFlagEffect`，切换场景用 `ChangeSceneEffect`，
-   声音用 `EmitNoiseEffect`。
+   旗标用 `SetFlagEffect`，状态字段用 `SetStateValueEffect`，开／关切换用 `ToggleFlagEffect`，
+   切换场景用 `ChangeSceneEffect`，声音用 `EmitNoiseEffect`。
 4. 需要驱动门、机关或生成器时用 `CallMethodEffect` 指向目标节点与方法，交互物本身不需要认识目标类型。
 5. 把物体场景放进关卡场景，放入需要交互演示的独立场景。
 

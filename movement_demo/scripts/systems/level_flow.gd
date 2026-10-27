@@ -12,8 +12,11 @@ const LEVELS: Array[String] = [
 ]
 
 @export_range(1, 5) var level_number: int = 1
+## 第一关完成后启用的返回传送门；其他关卡留空时继续使用结果面板。
+@export_node_path("Interactable") var return_portal_path: NodePath
 
 @onready var _health = get_parent().get_node("Player/Health")
+@onready var _return_portal = get_node_or_null(return_portal_path) as Interactable
 @onready var _result: ColorRect = $Result
 @onready var _title: Label = $Result/Center/Panel/Content/Title
 @onready var _message: Label = $Result/Center/Panel/Content/Message
@@ -41,6 +44,14 @@ func _on_encounter_completed() -> void:
 func _show_completion() -> void:
 	_transition_pending = false
 	if _health.is_dead: return
+	if level_number == 1:
+		if _return_portal == null:
+			push_error("第一关完成但未配置返回酒馆传送门")
+			return
+		_return_portal.visible = true
+		_return_portal.enabled = true
+		_return_portal.monitoring = true
+		return
 	if level_number < LEVELS.size():
 		_show_result("第 %d 关完成" % level_number, "全部敌人波次已清空。准备好后进入下一关。", "进入第 %d 关" % (level_number + 1), LEVELS[level_number])
 	else:

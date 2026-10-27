@@ -120,7 +120,7 @@ python movement_demo/tests/run_regressions.py --godot E:/Godot/Godot_v4.7.2-stab
 | --- | --- |
 | `systems` | 移动、奔跑、NPC 交互、听觉、声音模式、Debug、表现接口／复位、对话文件扫描，以及任务条件、任务状态、阶段接线、任务面板、唱片机支线、酒馆任务传送门、竞技场清场、奖励板和任务战斗闭环；由统一入口登记。可选交互物原型测试仅在本地文件存在时加入 |
 
-酒馆传送门专项同时检查正式切换后的 `World3D` 中性回退环境；五关流程专项检查按钮切关也走同一入口，防止 GL Compatibility 沿用上一场景的环境光。
+酒馆传送门专项同时检查正式切换后的 `World3D` 中性回退环境；关卡流程专项检查第一关完成后不出结果面板、返回传送门出现并完成任务 A，同时覆盖第2～5关原按钮切关与统一环境复位。
 | `combat` | `tests/run_combat_regressions.py` 的原玩家战斗清单 |
 | `enemy` | `tests/enemy/run_enemy_regressions.py` 的原敌人清单 |
 

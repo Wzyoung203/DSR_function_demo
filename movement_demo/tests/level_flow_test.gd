@@ -3,6 +3,7 @@ extends SceneTree
 ## 使用真实保存关卡、真实死亡和 GUI 鼠标事件；不伪造 encounter_completed。
 const Flow = preload("res://scripts/systems/level_flow.gd")
 const GuideScene = preload("res://scenes/ui/play_guide.tscn")
+const QuestControllerScript = preload("res://scripts/systems/stage/quest_controller.gd")
 var checks := 0
 var failures := 0
 var _capture := false
@@ -18,6 +19,9 @@ func _run() -> void:
 	if not fullscreen_proof:
 		root.size = Vector2i(1152, 720)
 		root.content_scale_size = root.size
+	var game_state := root.get_node("GameState")
+	game_state.help_choice = "accepted"
+	game_state.task_a_returned = ""
 	check(ProjectSettings.get_setting("application/run/main_scene") == "res://scenes/main.tscn", "默认主入口是酒馆")
 	change_scene_to_file(Flow.LEVELS[0])
 	await scene_changed
@@ -111,6 +115,27 @@ func _run() -> void:
 			await process_frame
 		for action in [&"move_right", &"move_down", &"move_left", &"move_up"]: Input.action_release(action)
 		Engine.time_scale = 1.0
+		if number == 1:
+			var return_portal = scene.get_node_or_null("TavernReturnPortal") as Interactable
+			check(not result.visible and not paused, "第1关清空后不显示进入下一关面板")
+			check(
+				return_portal != null and return_portal.visible and return_portal.enabled and return_portal.monitoring,
+				"第1关清空后出现返回酒馆传送门"
+			)
+			if return_portal != null:
+				check(return_portal.interact(player), "第1关返回传送门可以交互")
+				var returned: Node = await _wait_for_scene("res://scenes/main.tscn")
+				check(returned != null, "返回传送门加载酒馆场景")
+				if returned != null:
+					var quests = returned.get_node_or_null("QuestController")
+					check(
+						quests != null and quests.status_of(&"task_a") == QuestControllerScript.Status.COMPLETED,
+						"返回酒馆后任务 A 已完成"
+					)
+				change_scene_to_file(Flow.LEVELS[1])
+				await scene_changed
+				await process_frame
+			continue
 		check(result.visible and paused, "第%d关全部真实波次死亡后显示过关按钮并暂停" % number)
 		if not result.visible:
 			print(scene.get_node("EnemyWaves").debug_snapshot())
@@ -171,6 +196,16 @@ func _screenshot(filename: String) -> void:
 	if not _capture: return
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("res://logs/play_guide_20261027/" + filename)
+
+
+func _wait_for_scene(path: String) -> Node:
+	for _frame in range(180):
+		if is_instance_valid(current_scene) and current_scene.scene_file_path == path:
+			await process_frame
+			await process_frame
+			return current_scene
+		await process_frame
+	return null
 
 
 func check(condition: bool, message: String) -> void:

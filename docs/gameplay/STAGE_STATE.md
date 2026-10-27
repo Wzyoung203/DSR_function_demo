@@ -81,6 +81,7 @@
 1. A 的对话说明目标是消灭竞技场里的敌人。接受后 `help_choice` 写为 `accepted`，任务进入进行中；
    酒馆门口 `Interactables/LevelPortal` 随后解锁，按 E 可切换到 `scenes/world/levels/lvl_1.tscn`。
    旧门禁卡与门禁屏障已删除。
+   第一关清空后，出生点附近的 `TavernReturnPortal` 出现；交互会写入 `task_a_returned = returned` 并返回酒馆。
 2. 竞技场所有已注册敌人死亡时，`Arena` 发出 `combat_cleared`。控制器只在玩家存活、`task_a` 进行中且玩家在
    `site` 区域时响应；等待 5 秒后再次复核，再把场景树暂停并显示奖励面板。重复清场不会启动第二个结算。
 3. 奖励面板 `scenes/ui/reward_board.tscn`（`scripts/ui/reward_board.gd`）默认隐藏，`process_mode` 设为 ALWAYS，
@@ -94,9 +95,9 @@
 6. 配置表里 `task_a` 的完成条件因此是 `task_a_returned == returned`（`STATE_FIELD`），写入后任务完成，
    阶段进入 `RETURNED`（返回结算）。
 
-酒馆门口到第1关现在使用真实场景切换；上述竞技场奖励闭环仍保存在同一 `main.tscn` 内，`ReturnPortal` 和
-`TavernReturnPoint` 是其中的两个位置。五关通关后返回酒馆尚未接入。`system_progress` 目前只累计并显示在任务面板上，
-尚未用于章节解锁或后续内容门槛。
+酒馆门口到第1关以及第一关返回酒馆都使用真实场景切换；上述竞技场奖励闭环仍保存在同一 `main.tscn` 内，
+`ReturnPortal` 和 `TavernReturnPoint` 是其中的两个位置。第2～5关继续保留原按钮过关流程，完整五关后的统一返回尚未接入。
+`system_progress` 目前只累计并显示在任务面板上，尚未用于章节解锁或后续内容门槛。
 
 正式切场景统一经过 `SceneTransition`。切换前先把 `World3D` 的环境恢复为中性回退值，避免酒馆环境光残留到没有
 自己的 `WorldEnvironment` 的关卡；传送门、关卡按钮和死亡重开不会各自复制渲染清理代码。
