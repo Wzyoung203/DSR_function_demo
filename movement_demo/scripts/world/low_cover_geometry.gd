@@ -4,6 +4,7 @@ extends RefCounted
 const Geometry = preload("res://scripts/systems/character_geometry.gd")
 const VAULT_HEIGHT: float = 1.0
 const STANDING_HEIGHT: float = 1.75
+const VAULT_EDGE_EPSILON: float = 0.001
 
 static func _radius(actor: CollisionObject3D) -> float:
 	var collision := actor.get_node_or_null("CollisionShape3D") as CollisionShape3D
@@ -11,8 +12,8 @@ static func _radius(actor: CollisionObject3D) -> float:
 		return collision.shape.radius * maxf(absf(collision.global_basis.x.length()), absf(collision.global_basis.z.length()))
 	return 0.35
 
-static func _ray(actor: CollisionObject3D, from: Vector3, to: Vector3, ignore_characters: bool = false) -> Dictionary:
-	var query := PhysicsRayQueryParameters3D.create(from, to, actor.collision_mask, Geometry.exclusions(actor, ignore_characters))
+static func _ray(actor: CollisionObject3D, from: Vector3, to: Vector3, ignore_characters: bool = false, ignore_pushable_characters: bool = false) -> Dictionary:
+	var query := PhysicsRayQueryParameters3D.create(from, to, actor.collision_mask, Geometry.exclusions(actor, ignore_characters, ignore_pushable_characters))
 	return actor.get_world_3d().direct_space_state.intersect_ray(query)
 
 static func _low(body: Object) -> bool:
@@ -31,15 +32,24 @@ static func aim_cover(actor: CollisionObject3D, direction: Vector3, max_distance
 	if not high.is_empty(): return {}
 	return {"cover": low.collider, "position": low.position}
 
-static func query_vault(actor: CollisionObject3D, direction: Vector3, max_distance: float = 1.5, duration: float = 0.8) -> Dictionary:
+static func query_vault(actor: CollisionObject3D, direction: Vector3, max_distance: float = 1.5, duration: float = 0.8, ignore_pushable_characters: bool = false) -> Dictionary:
 	direction.y = 0.0
 	if direction.length_squared() < 0.001: return _failure("direction")
 	direction = direction.normalized()
-	var hit := _ray(actor, actor.global_position + Vector3.UP * 0.5, actor.global_position + Vector3.UP * 0.5 + direction * max_distance)
+	var origin := actor.global_position + Vector3.UP * 0.5
+	var hit := _ray(actor, origin, origin + direction * max_distance)
+	if hit.is_empty():
+		# An exactly aligned endpoint ray can miss from rotation roundoff. Probe
+		# one millimeter to either side; query_vault_at still validates the actual
+		# center, entire body corridor and landing, never the shifted ray origin.
+		var edge_offset := Vector3(direction.z, 0.0, -direction.x) * VAULT_EDGE_EPSILON
+		for offset: Vector3 in [edge_offset, -edge_offset]:
+			hit = _ray(actor, origin + offset, origin + offset + direction * max_distance)
+			if not hit.is_empty(): break
 	if hit.is_empty() or not _low(hit.collider): return _failure("no_low_cover")
-	return query_vault_at(actor, hit.collider, actor.global_position, direction, duration, false)
+	return query_vault_at(actor, hit.collider, actor.global_position, direction, duration, false, ignore_pushable_characters)
 
-static func query_vault_at(actor: CollisionObject3D, cover: Node3D, from: Vector3, direction: Vector3, duration: float = 0.8, ignore_characters: bool = true) -> Dictionary:
+static func query_vault_at(actor: CollisionObject3D, cover: Node3D, from: Vector3, direction: Vector3, duration: float = 0.8, ignore_characters: bool = true, ignore_pushable_characters: bool = false) -> Dictionary:
 	if not _low(cover) or not cover.vault_enabled: return _failure("not_vaultable")
 	var collision := cover.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if collision == null or not collision.shape is BoxShape3D: return _failure("shape")
@@ -62,7 +72,10 @@ static func query_vault_at(actor: CollisionObject3D, cover: Node3D, from: Vector
 	if side == 0.0 or absf(point[axis]) < half[axis]: return _failure("inside_wall")
 	var normal: Vector3 = basis[axis].normalized() * side
 	if direction.dot(-normal) < cos(deg_to_rad(40.0)): return _failure("approach_angle")
-	if absf(point[along]) > half[along] - (radius + 0.03) / scale_along: return _failure("edge")
+	# The capsule may extend past an open wall end. Actual occupancy and swept
+	# clearance below decide whether it fits; only its crossing center must be on
+	# the wall face (with a millimeter for transformed endpoint roundoff).
+	if (absf(point[along]) - half[along]) * scale_along > VAULT_EDGE_EPSILON: return _failure("edge")
 	var gap: float = (absf(point[axis]) - half[axis]) * scale_axis
 	if gap < radius - 0.03 or gap > 1.5: return _failure("entry_distance")
 	var thickness: float = half[axis] * 2.0 * scale_axis
@@ -72,17 +85,17 @@ static func query_vault_at(actor: CollisionObject3D, cover: Node3D, from: Vector
 	var exit_local := point
 	exit_local[axis] = -side * (half[axis] + (radius + 0.15) / scale_axis)
 	var landing := collision.to_global(exit_local)
-	var ground := _ray(actor, Vector3(landing.x, top + 0.1, landing.z), Vector3(landing.x, from.y - 0.45, landing.z), ignore_characters)
+	var ground := _ray(actor, Vector3(landing.x, top + 0.1, landing.z), Vector3(landing.x, from.y - 0.45, landing.z), ignore_characters, ignore_pushable_characters)
 	if ground.is_empty() or ground.normal.dot(Vector3.UP) < 0.8: return _failure("landing_ground")
 	landing = ground.position
 	if absf(landing.y - from.y) > 0.35: return _failure("landing_height")
-	var start_ground := _ray(actor, from + Vector3.UP * 0.1, from - Vector3.UP * 0.15, ignore_characters)
+	var start_ground := _ray(actor, from + Vector3.UP * 0.1, from - Vector3.UP * 0.15, ignore_characters, ignore_pushable_characters)
 	if start_ground.is_empty() or start_ground.normal.dot(Vector3.UP) < 0.8: return _failure("entry_ground")
-	if not Geometry.can_occupy(actor, landing, standing_height, radius, ignore_characters): return _failure("landing_space")
+	if not Geometry.can_occupy(actor, landing, standing_height, radius, ignore_characters, ignore_pushable_characters): return _failure("landing_space")
 	var lift: float = top + 0.06
 	var points := PackedVector3Array([from, Vector3(from.x, lift, from.z), Vector3(landing.x, lift, landing.z), landing])
 	for index in 3:
-		if not Geometry.can_sweep(actor, points[index], points[index + 1], vault_height, radius, ignore_characters): return _failure("blocked_arc")
+		if not Geometry.can_sweep(actor, points[index], points[index + 1], vault_height, radius, ignore_characters, ignore_pushable_characters): return _failure("blocked_arc")
 	var distance := from.distance_to(points[1]) + points[1].distance_to(points[2]) + points[2].distance_to(landing)
 	return {"valid": true, "reason": "", "cover": cover, "entry": from, "exit": landing, "points": points,
 		"duration": maxf(maxf(duration, 0.2), distance / 8.0), "height": vault_height}

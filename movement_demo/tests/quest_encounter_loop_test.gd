@@ -47,7 +47,7 @@ func _run() -> void:
 	var stage := scene.get_node_or_null("StageController")
 	var arena := scene.get_node_or_null("Arena")
 	var player: CharacterBody3D = scene.get_node_or_null("Player")
-	var enemy: CharacterBody3D = EnemyFixture.primary_enemy(scene)
+	var enemies: Array[Node] = EnemyFixture.members(arena)
 	var reward_board := scene.get_node_or_null("RewardBoard")
 	var controller := scene.get_node_or_null("EncounterController")
 	var return_point := scene.get_node_or_null("TavernReturnPoint")
@@ -66,7 +66,8 @@ func _run() -> void:
 	controller.set("reward_delay_seconds", 0.05)
 
 	player.set_physics_process(false)
-	enemy.set_physics_process(false)
+	for enemy in enemies:
+		enemy.set_physics_process(false)
 
 	state.set("help_choice", "")
 	state.set("task_a_returned", "")
@@ -99,8 +100,8 @@ func _run() -> void:
 	_check(health_node.health < health_node.max_health, "玩家先受到伤害以留出治疗空间")
 	var health_before_reward: float = health_node.health
 
-	enemy.receive_hit(10000.0)
-	check(not reward_board.visible and not tree.paused, "敌人死亡后五秒内不显示奖励面板")
+	_kill_enemies(enemies)
+	check(not reward_board.visible and not tree.paused, "全部敌人死亡后五秒内不显示奖励面板")
 	_check(await _wait_until(tree, func() -> bool: return reward_board.visible and tree.paused),
 		"等待结束后暂停并显示奖励面板")
 
@@ -157,12 +158,12 @@ func _check_ammo_reward_path() -> void:
 	var scene: Node = context["scene"]
 	var tree: SceneTree = context["tree"]
 	var arena = context["arena"]
-	var enemy = context["enemy"]
+	var enemies: Array = context["enemies"]
 	var player = context["player"]
 	var board = context["board"]
 	var controller = context["controller"]
 	var portal = context["portal"]
-	var slots = player.get_node("WeaponSlots")
+	var slots = player.get_node("Equipment")
 
 	slots.select_slot(1)
 	slots.select_slot(0)
@@ -174,15 +175,15 @@ func _check_ammo_reward_path() -> void:
 	for ammo_type in slots.reserve_ammo.keys():
 		slots.reserve_ammo[ammo_type] = 0
 
-	enemy.receive_hit(10000.0)
+	_kill_enemies(enemies)
 	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused),
 		"弹药奖励：真实清场暂停并显示面板")
 	check(controller.select_reward(&"ammo"), "弹药奖励：选择成功")
 	check(
-		slots.reserve_ammo[WeaponData.AmmoType.RIFLE] == slots.starting_rifle_ammo
-		and slots.reserve_ammo[WeaponData.AmmoType.PISTOL] == slots.starting_pistol_ammo
-		and slots.reserve_ammo[WeaponData.AmmoType.SMG] == slots.starting_smg_ammo
-		and slots.reserve_ammo[WeaponData.AmmoType.SHOTGUN] == slots.starting_shotgun_ammo,
+		slots.reserve_ammo[&"rifle"] == slots.starting_rifle_ammo
+		and slots.reserve_ammo[&"pistol"] == slots.starting_pistol_ammo
+		and slots.reserve_ammo[&"smg"] == slots.starting_smg_ammo
+		and slots.reserve_ammo[&"shotgun"] == slots.starting_shotgun_ammo,
 		"弹药奖励：四类备弹恢复初始值"
 	)
 	var magazines_refilled := true
@@ -204,14 +205,14 @@ func _check_system_progress_reward_path() -> void:
 	var scene: Node = context["scene"]
 	var tree: SceneTree = context["tree"]
 	var state = context["state"]
-	var enemy = context["enemy"]
+	var enemies: Array = context["enemies"]
 	var board = context["board"]
 	var controller = context["controller"]
 	var portal = context["portal"]
 	var progress_bar: ProgressBar = scene.get_node("QuestPanel/Panel/Margin/Content/SystemProgress/Bar")
 	var progress_label: Label = scene.get_node("QuestPanel/Panel/Margin/Content/SystemProgress/Label")
 
-	enemy.receive_hit(10000.0)
+	_kill_enemies(enemies)
 	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused),
 		"系统进度奖励：真实清场暂停并显示面板")
 	check(progress_bar.value == 0.0 and progress_label.text.contains("0 / 100"), "系统进度奖励：选择前面板显示零进度")
@@ -247,9 +248,10 @@ func _prepare_fresh_encounter() -> Dictionary:
 
 	var arena = scene.get_node("Arena")
 	var player: CharacterBody3D = scene.get_node("Player")
-	var enemy: CharacterBody3D = EnemyFixture.primary_enemy(scene)
+	var enemies: Array[Node] = EnemyFixture.members(arena)
 	player.set_physics_process(false)
-	enemy.set_physics_process(false)
+	for enemy in enemies:
+		enemy.set_physics_process(false)
 	player.global_position = arena.to_global(Vector3(-4.0, 0.0, 0.0))
 	await _wait_physics_frames(tree, MAX_SETTLE_FRAMES)
 	scene.get_node("StageController").set_player_in_zone(&"site", true)
@@ -259,11 +261,17 @@ func _prepare_fresh_encounter() -> Dictionary:
 		"state": state,
 		"arena": arena,
 		"player": player,
-		"enemy": enemy,
+		"enemies": enemies,
 		"board": scene.get_node("RewardBoard"),
 		"controller": scene.get_node("EncounterController"),
 		"portal": scene.get_node("Arena/CombatZone/ReturnPortal"),
 	}
+
+
+func _kill_enemies(enemies: Array) -> void:
+	for enemy in enemies:
+		if is_instance_valid(enemy) and not enemy.is_dead:
+			enemy.receive_hit(10000.0)
 
 
 func _close_scene(scene: Node) -> void:

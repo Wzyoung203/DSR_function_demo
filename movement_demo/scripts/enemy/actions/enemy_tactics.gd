@@ -22,15 +22,6 @@ var _move_best_distance := INF
 var _move_stuck_seconds := 0.0
 var _melee_requested := false
 
-func assignment_escape(candidate: Dictionary, visible: bool) -> bool:
-	# This variant validates actual body cooldown, weapon reach and target access.
-	return candidate.get("id") == action_id and candidate.get("plan") == &"melee" and validate(candidate, visible)
-
-
-
-
-
-
 func get_engagement_candidate_points() -> Array[Vector3]:
 	var points: Array[Vector3] = []
 	if not is_enabled() or context.combat_type != context.CombatType.RANGED or not actor.can_use_firearms():
@@ -138,9 +129,15 @@ func step_evaluated_engagement(destination: Dictionary, delta: float, sees_playe
 		agent.target_position = point
 	ranged_has_destination = true
 	var distance: float = context._horizontal_distance(point)
-	if distance <= 0.12:
+	# A shared report still needs personal sight at the validated wall edge.
+	# The ordinary firing-post tolerance can stop on the occluded side of it.
+	if distance <= (0.025 if shared_approach else 0.12):
 		reset_movement_progress()
 		context.state = context.State.HOLD_POSITION
+		if shared_approach and not sees_player:
+			context.block_utility_destination(point)
+			_running = false
+			context.invalidate_utility()
 		if context._horizontal_distance(context.last_known_position) < _ranged_distance_band().x:
 			_running = false
 		return Vector3.ZERO
@@ -345,6 +342,11 @@ func tick(delta: float, visible: bool) -> Dictionary:
 			retreat = step_evaluated_engagement(plan.destination, delta, visible)
 			_running = true # 到达或路径失效只停止移动，不能跳过未完成的收招。
 		return motion(retreat, 1.0, context.last_known_position - actor.global_position, {}, {"owner": action_id})
+	# A newly proposed squad choice can fail its acceptance transaction. Do not
+	# keep emitting the previous visible-contact intent while it is replaced.
+	if not visible:
+		_running = false
+		return motion(Vector3.ZERO)
 	var direction := Vector3.ZERO
 	if plan.destination.is_empty():
 		context.state = context.State.HOLD_POSITION
@@ -380,7 +382,7 @@ func _melee_facts() -> Dictionary:
 	# It cancels reload progress: only an empty magazine needs a new full reload.
 	var resume: float = occupied
 	if actor.ammo.magazine_rounds == 0 and actor.weapon != null:
-		resume += maxf(0.1, actor.weapon.reload_seconds)
+		resume += actor.ammo.reload_remaining_seconds(false)
 	var ready: float = maxf(resume + maxf(0.0, context.fire.fire_reaction_seconds),
 		maxf(context.fire.pause_after_no_fire_seconds(), context.fire.shot_wait_seconds())) + context.fire.estimated_reset_steady_wait()
 	if not actor.can_use_firearms(): ready = horizon
@@ -415,3 +417,9 @@ func _free_melee_push_distance(threat: Vector3, direction: Vector3, distance: fl
 	query.exclude = [actor.get_rid(), context.player.get_rid()]
 	var fractions: PackedFloat32Array = actor.get_world_3d().direct_space_state.cast_motion(query)
 	return distance * fractions[0] if not fractions.is_empty() else 0.0
+
+func command_roles() -> Array[StringName]:
+	return [&"engage", &"guard", &"move"] if actor.can_use_firearms() else []
+
+func command_work(_delta: float, visible: bool, _arrived: bool) -> Dictionary:
+	return {"fire": {"owner": action_id, "mode": &"visible"}} if visible and actor.can_use_firearms() else {}

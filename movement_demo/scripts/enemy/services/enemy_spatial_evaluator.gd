@@ -125,12 +125,14 @@ func advance_evaluation() -> void:
 	total_evaluated_count += prepared
 	# Route geometry shares the same frame budget, rather than running inside candidate collection.
 	# Catch-up can leave only odd physics frames available for preparation.
-	# Preserve the four-step interval without depending on one modulo phase.
-	if context.routes.has_pending() and (_route_preparation_frame < 0 or frame - _route_preparation_frame >= 4) and Time.get_ticks_usec() - started < EVALUATION_BUDGET_USEC:
-		context.routes.advance_one()
+	# Current pursuit and started validation must finish before movement invalidates
+	# their origin. Unstarted optional routes retain the four-step interval.
+	var route_interval := 1 if context.routes.has_priority_pending() else 4
+	if context.routes.has_pending() and (_route_preparation_frame < 0 or frame - _route_preparation_frame >= route_interval) and Time.get_ticks_usec() - started < EVALUATION_BUDGET_USEC:
+		var route_units: int = context.routes.advance_one(started + EVALUATION_BUDGET_USEC)
 		_route_preparation_frame = frame
-		last_evaluated_count += 1
-		total_evaluated_count += 1
+		last_evaluated_count += route_units
+		total_evaluated_count += route_units
 	for job in jobs:
 		job.owners = job.owners.filter(func(owner): return owner.get_ref() != null and owner.get_ref().is_enabled())
 		if not job.owners.is_empty(): job.owner = job.owners[0]
@@ -372,7 +374,7 @@ func _reload_seconds(ai) -> float:
 		return 0.0
 	if ai.actor.ammo.magazine_rounds > 0 and not ai.actor.ammo.is_reloading:
 		return 0.0
-	return maxf(0.1, ai.actor.weapon.reload_seconds) * (1.0 - ai.actor.ammo.reload_progress)
+	return ai.actor.ammo.reload_remaining_seconds()
 
 func _ammo_wait(ai) -> float:
 	if not ai.actor.can_use_firearms():

@@ -12,8 +12,9 @@ var utility_options: Array[Dictionary] = []
 var _utility_timer := 0.0
 var _utility_boundary_recheck := false
 var _utility_elapsed := 0.0
-var _initial_geometry_revision := 0
-var _team_decision_revision := 0
+var utility_decision_count := 0
+var command_decision_count := 0
+var _battle_profile_serial := 0
 var _configuration := 0
 var _implementations: Dictionary = {}
 var _enabled_last_frame := false
@@ -37,36 +38,43 @@ var utility_current: Dictionary:
 	get: return context.utility_current
 	set(value): context.utility_current = value
 @export_group("Utility AI")
+## 仅个人模式（配合等级0或无小队绑定）生效，默认4秒；等级1/2请调整Squad的团队评分。
 ## 所有动作共同估计未来多少秒的火力缺失、暴露和信息损失，单位为秒。
 ## 调大更重视转移到位后的持续收益，调小更重视眼前收益；实际动作仍可提前结束或重评。
 @export_range(1.0, 12.0, 0.5) var utility_horizon_seconds: float = 4.0
+## 仅个人模式生效，默认3；团队指挥不读取此权重。
 ## 每秒有效火力缺失的代价权重；各项相加后选择总代价最低的方案。
 ## 调大更倾向维持射击、尽快恢复火力；调小更能接受停火转移或躲藏。0表示不计此项代价。
 @export_range(0.0, 10.0, 0.1) var utility_fire_weight: float = 3.0
+## 仅个人模式生效，默认4；团队避险触发读取成员Training的Stress Tolerance。
 ## 暴露风险的基础权重，还会乘上伤势、近期受击/近弹压力和可见目标的近身压力。
 ## 调大更重视掩护和拉开距离，调小更愿意暴露交战；没有压力时不会仅因权重大就强制躲藏。
 ## 0表示不计暴露风险；本参数不改变受到命中时的准度惩罚。
-@export_range(0.0, 10.0, 0.1) var utility_risk_weight: float = 3.0
+@export_range(0.0, 10.0, 0.1) var utility_risk_weight: float = 4.0
+## 仅个人模式生效，默认1；不控制团队搜索分工。
 ## 每秒信息损失的代价权重，例如躲进掩体后无法持续观察目标。
 ## 调大更重视保持/重新获得目标信息，调小更能接受失视躲藏；0表示不计此项代价。
 @export_range(0.0, 10.0, 0.1) var utility_information_weight: float = 1.0
-## 每秒有效协作收益的信用；0保留协作候选但关闭团队收益偏好。
-@export_range(0.0, 10.0, 0.1) var utility_cooperation_weight: float = 4.0
+## 仅个人模式生效，默认0.4秒；不是协调器的重排周期。
 ## 正常情况下重新收集并比较动作候选的间隔，单位为秒；受击、配置变化等可请求提前重评。
 ## 调小反应更及时但评估更频繁，调大更省计算但可能反应较慢；重评后仍需满足切换条件。
 @export_range(0.1, 2.0, 0.1) var utility_recheck_seconds: float = 0.4
+## 仅个人模式生效，默认0.6秒；不延长团队任务或掩体躲藏时限。
 ## 新方案开始后通常至少保持的时间，单位为秒，减少动作反复切换。
 ## 调大执行更稳定但接管更慢；0取消此等待。当前方案失效或动作主动释放保持时可提前切换。
 ## 保持时间结束后仍需满足切换优势，并且当前动作允许被中断。
 @export_range(0.0, 3.0, 0.1) var utility_hold_seconds: float = 0.6
+## 仅个人模式生效，默认0.5分；不是百分比，也不是协调器的切换阈值。
 ## 新方案的总代价须比当前有效方案低超过此分值，才通常允许切换；这是绝对分差。
 ## 调大更愿意继续当前方案，调小更容易换动作；与三个代价权重的尺度相关。
 ## 0仍只会因更优方案而切换；当前方案失效或动作主动释放保持时不受此分差限制。
 @export_range(0.0, 5.0, 0.1) var utility_switch_advantage: float = 0.5
+## 仅个人风险评分使用，默认4秒；不改变团队共享情报的有效期限。
 ## 没有目击、受伤或近弹的新证据时，旧威胁确定性每过这么多秒减半。
 ## 调大使旧威胁的避险影响保留更久，调小更快降低旧威胁影响；不会删除位置记忆或强制出掩体。
 ## 只控制风险估计中的威胁确定性，不控制受击/近弹压力自身的消退速度，也不削弱可见目标的近身压力。
 @export_range(0.5, 30.0, 0.5) var utility_threat_half_life_seconds: float = 4.0
+## 默认关闭，仅输出个人Utility选优；团队任务请看协调器的调试快照。
 ## 与 Debug 总开关同时开启时，在动作切换成功后输出选中动作、总代价及火力/风险/信息代价。
 ## cost越低越有利于被选中；未选候选可在运行时查看本节点的utility_options。
 @export var debug_utility: bool = false
@@ -81,9 +89,11 @@ func _ready() -> void:
 	context.melee.setup(context)
 	context.reevaluate.connect(invalidate_utility)
 	context.event_received.connect(_dispatch_event)
+	context.command_query_requested.connect(_command_query)
 	context.fire.shot_fired.connect(_on_shot_fired)
 	perception.noise_heard.connect(_on_noise_heard)
 	actor.hit_received.connect(_on_hit_received)
+	actor.weapon_effects_received.connect(context.apply_weapon_hit)
 	actor.reset_completed.connect(_reset_decisions)
 	add_to_group("shot_listener")
 	refresh_configuration(true)
@@ -130,14 +140,15 @@ func _physics_process(delta: float) -> void:
 	if context.refresh_environment():
 		_reset_decisions()
 	var stamp := Time.get_ticks_usec()
-	refresh_configuration()
+	if not context.commanded() or context.member_capability_snapshot().is_empty(): refresh_configuration()
+	if context.member_capability_snapshot().is_empty(): _capture_battle_capabilities()
 	frame_costs.configuration = Time.get_ticks_usec() - stamp
 	stamp = Time.get_ticks_usec()
-	for key in [&"utility_horizon_seconds", &"utility_fire_weight", &"utility_risk_weight", &"utility_information_weight", &"utility_cooperation_weight", &"utility_threat_half_life_seconds"]:
+	for key in [&"utility_horizon_seconds", &"utility_fire_weight", &"utility_risk_weight", &"utility_information_weight", &"utility_threat_half_life_seconds"]:
 		context.set(key, get(key))
 	var enabled: bool = not actor.is_dead and is_arena_active() and not player.is_dead() and not player.is_in_dialogue
 	if not enabled:
-		if is_instance_valid(player) and player.is_in_dialogue: actor.clear_melee_hit_effects()
+		if is_instance_valid(player) and player.is_in_dialogue: actor.clear_hit_effects()
 		if _enabled_last_frame: reset_actions()
 		_enabled_last_frame = false
 		actor.cancel_reload()
@@ -150,39 +161,34 @@ func _physics_process(delta: float) -> void:
 	if NavigationServer3D.map_get_iteration_id(agent.get_navigation_map()) == 0: return
 	var visible: bool = perception.can_see_player()
 	context.update_evidence(delta, visible)
+	if context.commanded(): _publish_command_action_states()
 	frame_costs.perception = Time.get_ticks_usec() - stamp
 	stamp = Time.get_ticks_usec()
-	context.spatial.advance_evaluation()
-	if _initial_geometry_revision != context.spatial.initial_ready_revision:
-		_initial_geometry_revision = context.spatial.initial_ready_revision
-		# A newly prepared squad option can disappear as this member walks before
-		# the ordinary timer elapses. Reconsider once through the normal selector;
-		# this does not scan extra points, force an action or release a body lock.
-		if context.team_cooperation_abilities().get("level", 0) == 2 and context.cooperation_member_count() > 1: invalidate_utility()
-	var team_revision: int = context.coordination_decision_revision()
-	if _team_decision_revision != team_revision:
-		_team_decision_revision = team_revision
-		invalidate_utility()
+	if context.commanded():
+		context.advance_coordination_map(4, Time.get_ticks_usec() + 500, Engine.get_physics_frames())
+	else:
+		context.spatial.advance_evaluation()
 	frame_costs.spatial = Time.get_ticks_usec() - stamp
 	stamp = Time.get_ticks_usec()
-	_update_utility_decision(delta, visible)
+	if context.commanded(): _update_command_decision()
+	else: _update_utility_decision(delta, visible)
 	frame_costs.decision = Time.get_ticks_usec() - stamp
 	stamp = Time.get_ticks_usec()
 	var output: Dictionary = {}
 	if current_action != null:
-		output = current_action.execute_tick(delta, visible)
+		output = current_action.execute_command(delta, visible) if context.commanded() else current_action.execute_tick(delta, visible)
 	var direction: Vector3 = output.get("direction", Vector3.ZERO)
+	var scheduled_members: Array = output.get("scheduled_members", [])
+	if scheduled_members.is_empty() and direction.is_zero_approx(): scheduled_members = context.coordinated_stationary_members()
 	actor.request_crouch(output.get("crouch", false))
 	if not output.get("vault", {}).is_empty(): actor.begin_vault(output.vault)
 	actor.face_direction(output.get("facing", Vector3.ZERO), delta)
 	# 先登记近战执行占用，再消费移动／射击意图；新行为同帧提交冲突请求也受身体约束。
 	context.melee.update(delta, visible, output.get("melee", {}))
-	actor.move_character(direction, delta, output.get("multiplier", 1.0))
+	actor.move_character(direction, delta, output.get("multiplier", 1.0), output.get("stop_position", Vector3.INF), scheduled_members)
 	var moving: bool = not actor.get_local_movement_velocity().is_zero_approx() or Vector2(actor.velocity.x, actor.velocity.z).length_squared() > 0.0025
 	context.fire.update(delta, visible, moving, output.get("fire", {}))
 	context.cooperation_publish_execution(output)
-	if current_action != null and not context._coordination_execution.is_empty():
-		context.report_coordination_execution(current_action.execution_contract(visible))
 	frame_costs.execution = Time.get_ticks_usec() - stamp
 	if current_action != null and not output.get("running", true):
 		context.investigation_hint_allowed = true
@@ -191,58 +197,44 @@ func _physics_process(delta: float) -> void:
 	_update_label()
 
 func _update_utility_decision(delta: float, visible: bool) -> void:
+	assert(not context.commanded())
 	_utility_elapsed += delta
 	_utility_timer -= delta
-	# A specifically scheduled hold-boundary check must not slip one physics
-	# step because subtraction leaves a positive floating-point tail.
 	if _utility_boundary_recheck and is_zero_approx(_utility_timer): _utility_timer = 0.0
 	if actor.is_vaulting(): return
 	var valid: bool = current_action != null and current_action.valid(visible)
 	if _utility_timer > 0.0 and (valid or current_action == null): return
 	_utility_timer = utility_recheck_seconds
 	_utility_boundary_recheck = false
+	utility_decision_count += 1
 	context.prepare_coordination_evaluation()
 	utility_options = action_selector.assess_options(self, visible)
-	_publish_coordination_inputs(visible)
-	var contract: Dictionary = current_action.execution_contract(visible) if current_action != null and not context._coordination_execution.is_empty() else {}
-	context.report_coordination_execution(contract)
-	var bound: bool = current_action != null and context.coordination_continuation(contract, current_action.action_id)
-	var choices: Array[Dictionary] = context.coordination_choices(utility_options)
-	if bound and not contract.get("segment_boundary", true):
-		choices = choices.filter(func(candidate): return candidate.get("assignment_escape_verified", false) or candidate.get("coordination_offer_key", "") == context._coordination_execution.get("selected_offer_key", ""))
+	var choices: Array[Dictionary] = context.personal_position_choices(utility_options)
 	var best: Dictionary = action_selector.choose_option(choices, utility_current)
 	var cost := INF
-	for candidate in utility_options:
-		if not action_selector.same_option(candidate, utility_current): continue
-		cost = candidate.cost
-		if bound:
-			# A refreshed score does not replace the accepted short segment.
-			utility_current = utility_current.duplicate()
-			utility_current.cost = candidate.cost
-			utility_current.breakdown = candidate.get("breakdown", {})
-		else:
-			utility_current = candidate
-		if current_action != null: current_action.plan = utility_current
-	var current_choice: Dictionary = {}
 	for candidate in choices:
 		if action_selector.same_option(candidate, utility_current):
-			current_choice = candidate
-			break
-	valid = valid and is_finite(cost) and not current_choice.is_empty()
-	if valid: valid = context.maintain_coordination_choice(current_choice)
-	# Body/action protection is independent of candidate availability or orders.
+			cost = candidate.cost
+			utility_current = candidate
+			if current_action != null: current_action.plan = candidate
+	valid = valid and is_finite(cost)
+	if valid: valid = context.maintain_coordination_choice(utility_current)
 	if current_action != null and not current_action.can_interrupt(best, visible): return
-	if bound and best.is_empty(): return
 	if best.is_empty():
 		_cancel_utility_execution()
 		context.state = State.IDLE
 		return
-	var transition: bool = context.assignment_requires_transition(best, utility_current)
-	if bound and not transition and action_selector.same_option(best, utility_current): return
-	if valid and not transition and action_selector.same_option(best, utility_current): return
-	if valid and not transition and not current_action.hold_released():
-		if _utility_elapsed < utility_hold_seconds and not is_equal_approx(_utility_elapsed, utility_hold_seconds):
-			# Preserve the original bounded reconsideration at the hold boundary.
+	if valid and action_selector.same_option(best, utility_current): return
+	if valid and not current_action.hold_released():
+		# A newly prepared crossing can refine the current action/destination
+		# before the walk takes us away from its entry. Other action changes
+		# still observe the hold; all refinements keep the cost advantage gate.
+		var route_refinement := false
+		if utility_current.get("route", {}).is_empty() and not best.get("route", {}).is_empty():
+			var walking_equivalent := best.duplicate()
+			walking_equivalent.erase("route")
+			route_refinement = action_selector.same_option(walking_equivalent, utility_current)
+		if not route_refinement and _utility_elapsed < utility_hold_seconds and not is_equal_approx(_utility_elapsed, utility_hold_seconds):
 			if not best.get("route", {}).is_empty() and best.cost + utility_switch_advantage < cost:
 				var remaining := utility_hold_seconds - _utility_elapsed
 				if remaining < _utility_timer:
@@ -251,39 +243,6 @@ func _update_utility_decision(delta: float, visible: bool) -> void:
 			return
 		if best.cost + utility_switch_advantage >= cost: return
 	_start_utility_option(best, visible)
-
-func _publish_coordination_inputs(visible: bool) -> void:
-	var offers: Array[Dictionary] = []
-	var assignment: Dictionary = context.coordination_assignment()
-	if context.cooperation_enabled() and context.cooperation != null and context.cooperation_member_count() > 1:
-		for action in actions.values():
-			if action.is_enabled(): offers.append_array(action.coordination_offers(visible))
-	# Preview only work that the current execution can actually accept. An
-	# already accepted, valid segment keeps its own continuation while protected.
-	var publishable: Array[Dictionary] = utility_options
-	if context.cooperation_enabled() and context.cooperation != null and context.cooperation_member_count() > 1:
-		publishable = []
-		var contract: Dictionary = current_action.execution_contract(visible) if current_action != null else {}
-		var continuing: bool = current_action != null and context.coordination_continuation(contract, current_action.action_id)
-		var acceptance_times: Dictionary = {}
-		for candidate in utility_options:
-			var same_execution: bool = continuing and candidate.get("id") == current_action.action_id and candidate.get("coordination_offer_key", "") == context._coordination_execution.get("selected_offer_key", "")
-			if same_execution or current_action == null or current_action.can_interrupt(candidate, visible):
-				publishable.append(candidate)
-			elif candidate.get("id") == current_action.action_id and contract.get("valid", false):
-				var remaining: float = float(contract.get("remaining_seconds", 0.0))
-				if is_finite(remaining) and remaining > 0.0:
-					publishable.append(candidate)
-					acceptance_times[candidate.get("coordination_offer_key", "")] = context.evidence_elapsed_seconds + remaining + utility_recheck_seconds
-		for offer in offers:
-			if acceptance_times.has(offer.get("offer_key", "")): offer.accept_after = acceptance_times[offer.offer_key]
-	context.publish_coordination_offers(publishable, offers)
-	for candidate in utility_options:
-		# Always overwrite caller metadata; an urgent label grants no permission.
-		candidate.assignment_escape_verified = false
-		if assignment.is_empty(): continue
-		var owner = actions.get(candidate.get("id"))
-		if owner != null: candidate.assignment_escape_verified = owner.assignment_escape(candidate, visible)
 
 func _start_utility_option(candidate: Dictionary, visible: bool) -> void:
 	var next = actions.get(candidate.get("id"))
@@ -294,27 +253,84 @@ func _start_utility_option(candidate: Dictionary, visible: bool) -> void:
 	if transaction.required and transaction.token.is_empty():
 		invalidate_utility()
 		return
-	_cancel_utility_execution(&"self_preservation" if candidate.get("assignment_escape_verified", false) and not context.coordination_assignment().is_empty() else &"switch")
+	_cancel_utility_execution(&"switch")
 	current_action = next
 	utility_current = candidate
 	_utility_elapsed = 0.0
-	if not next.begin(candidate, visible):
+	if not next.begin(candidate, visible) or not context.commit_coordination_choice(transaction):
 		context.rollback_coordination_choice(transaction)
 		_cancel_utility_execution(&"failed")
-		context.state = State.IDLE
 		invalidate_utility()
 		return
-	if not context.commit_coordination_choice(transaction):
-		context.rollback_coordination_choice(transaction)
-		_cancel_utility_execution(&"reservation_failed")
-		invalidate_utility()
-		return
-	# This same decision may have published previews before choosing a protected
-	# personal action. Withdraw those previews immediately; accepted work stays.
-	if context.cooperation_enabled() and context.cooperation != null and context.cooperation_member_count() > 1 and context._coordination_execution.is_empty() and not current_action.can_interrupt({}, visible):
-		_publish_coordination_inputs(visible)
 	if debug_utility and actor.debug_settings.enabled:
 		print("[AI][Utility] ", candidate.id, " cost=", candidate.get("cost", 0.0), " ", candidate.get("breakdown", {}))
+
+func _capture_battle_capabilities() -> void:
+	_battle_profile_serial += 1
+	# Shared perception, geometry and Fire settings use the same battle copy as
+	# action parameters. Editor changes take effect on the next assembly.
+	if context.commanded() and context.training != null:
+		context.training = context.training.duplicate(true)
+	var installed := {}
+	for id in actions:
+		if actions[id].is_enabled(): installed[id] = actions[id].freeze_command_capability()
+	var weapon := {}
+	if actor.weapon != null:
+		for key in [&"fire_range", &"magazine_capacity", &"reload_seconds", &"melee_enabled", &"melee_range", &"melee_height_tolerance"]:
+			weapon[key] = actor.weapon.get(key)
+	context.install_member_capabilities({"ready": true, "member_id": actor.get_instance_id(),
+		"profile_id": "%s:%s" % [actor.get_instance_id(), _battle_profile_serial],
+		"unit_id": context.unit.unit_id if context.unit != null else &"",
+		"capabilities": context.unit.capabilities.duplicate() if context.unit != null else [],
+		"training": context.training.display_name if context.training != null else "",
+		"stress_tolerance": float(context.setting(&"tactics", &"stress_tolerance", 0.4)),
+		"run_speed_multiplier": float(context.setting(&"cooperation", &"run_speed_multiplier", 2.0)),
+		"actions": installed, "firearms": actor.can_use_firearms(), "weapon": weapon,
+		"body": context.coordination_motion_state()})
+	_publish_command_action_states()
+
+func _publish_command_action_states() -> void:
+	var states := {}
+	for id in actions:
+		var state: Dictionary = actions[id].command_runtime_state()
+		if not state.is_empty(): states[id] = state
+	context.command_action_states = states
+
+func _command_query(request: Dictionary) -> void:
+	preload("res://scripts/enemy/services/enemy_command_offers.gd").dispatch(actions, request)
+
+func _update_command_decision() -> void:
+	assert(context.commanded())
+	utility_options.clear()
+	var task: Dictionary = context.coordination_assignment()
+	if task.is_empty():
+		if current_action != null: _cancel_utility_execution(&"awaiting_command")
+		return
+	if current_action != null and preload("res://scripts/enemy/services/squad_contract.gd").same_task(current_action.command, task): return
+	if actor.is_vaulting() or actor.melee_active:
+		context.report_command(task, &"occupied", {"reason": &"body_busy"})
+		return
+	var next = actions.get(task.get("action"))
+	if next == null or not context.validate_command_post(task, context.member_capability_snapshot()) or not context.validate_command_offer(task, context.member_capability_snapshot()):
+		context.report_command(task, &"blocked", {"reason": &"executor_unavailable"})
+		return
+	if current_action == next and not task.get("plan_key", []).is_empty() and next.command.get("plan_key", []) == task.plan_key and next.command.get("stage", &"") == task.get("stage", &""):
+		if context.accept_command(task):
+			next.continue_command(task)
+			utility_current = next.plan
+			command_decision_count += 1
+		else: context.report_command(task, &"blocked", {"reason": &"accept_failed"})
+		return
+	_cancel_utility_execution(&"command_replaced")
+	var started: bool = next.begin_command(task)
+	if not started or not context.accept_command(task):
+		next.cancel(&"accept_failed")
+		context.report_command(task, &"blocked", {"reason": &"accept_failed", "executor_started": started,
+			"expected_map_revision": task.get("map_revision", -1), "actual_map_revision": context.coordination_search_revision()})
+		return
+	current_action = next
+	utility_current = next.plan
+	command_decision_count += 1
 
 func _cancel_utility_execution(reason: StringName = &"switch") -> void:
 	if current_action != null: current_action.cancel(reason)
@@ -333,6 +349,10 @@ func is_arena_active() -> bool:
 
 func is_active() -> bool:
 	return context.is_alerted and not actor.is_dead
+
+## 波次只向就绪 AI 交付冻结线索，动作选择与小队控制权仍由原流程持有。
+func receive_spawn_search_hint(hint: Dictionary) -> bool:
+	return is_node_ready() and context.receive_spawn_search_hint(hint)
 
 func can_use_action(id: StringName) -> bool:
 	return context.can_use_action(id)
@@ -359,6 +379,7 @@ func _reset_decisions() -> void:
 	_update_label()
 
 func _dispatch_event(event: StringName, data: Dictionary) -> void:
+	if context.commanded(): return
 	for action in actions.values(): action.on_event(event, data)
 
 func _on_hit_received(damage: float, attacker_position: Vector3) -> void:
@@ -374,15 +395,16 @@ func _on_hit_received(damage: float, attacker_position: Vector3) -> void:
 		invalidate_utility()
 	_update_label()
 
-func notice_shot(origin: Vector3, endpoint: Vector3) -> void:
-	context.notice_shot(origin, endpoint)
+func notice_shot(origin: Vector3, endpoint: Vector3, effects: Dictionary) -> void:
+	context.notice_shot(origin, endpoint, effects)
 
 func _on_noise_heard(position: Vector3) -> void:
-	if actor.is_dead or not is_arena_active() or perception.can_see_player() or (current_action != null and not utility_current.get("accepts_noise", false)): return
+	if actor.is_dead or not is_arena_active() or perception.can_see_player(): return
 	if NavigationServer3D.map_get_iteration_id(agent.get_navigation_map()) == 0: return
+	context.publish_coordination_noise(position)
+	if not context.commanded() and current_action != null and not utility_current.get("accepts_noise", false): return
 	if context.noise_search_origin.is_finite() and context.noise_search_origin.distance_to(position) < 0.35: return
 	context.noise_search_origin = position
-	context.publish_coordination_noise(position)
 	context.last_known_position = position
 	context.is_alerted = true
 	_dispatch_event(&"noise", {"position": position})
@@ -393,10 +415,20 @@ func _on_shot_fired() -> void:
 
 func _update_label() -> void:
 	var label: String = current_action.state_label() if current_action != null else ("已死亡" if actor.is_dead else "待命")
+	if context.commanded() and not actor.is_dead:
+		var task: Dictionary = context.coordination_assignment()
+		var names := {&"engage": "接敌", &"support": "支援", &"flank": "侧翼机动", &"search": "搜索", &"guard": "警戒", &"reload": "换弹", &"move": "让路", &"patrol": "巡逻"}
+		label = "队伍指挥·%s" % names.get(task.get("role"), "等待任务")
+		if task.get("role") == &"guard" and task.has("recovery_reason"):
+			var recovery_names := {&"finding_post": "寻找接敌位置", &"post_occupied": "调整站位", &"friendly_fire_lane": "调整射界", &"passage_occupied": "等待通道"}
+			if not actor.can_use_firearms(): recovery_names[&"friendly_fire_lane"] = "避让队友射线"
+			label = "队伍指挥·%s" % recovery_names.get(task.recovery_reason, "寻找接敌位置")
 	var name: String = context.unit.display_name if context.unit != null else "未配置兵种"
 	actor.set_status_text("%s：%s\n生命 %d / %d" % [name, label, ceili(actor.health), ceili(actor.max_health)])
 
 func _exit_tree() -> void:
+	if is_instance_valid(actor) and actor.weapon_effects_received.is_connected(context.apply_weapon_hit):
+		actor.weapon_effects_received.disconnect(context.apply_weapon_hit)
 	_physics_was_enabled = is_physics_processing()
 	context.detach_environment()
 	# 打破公共 RefCounted 服务之间的所有权环；运行中实例由 actions 唯一持有。

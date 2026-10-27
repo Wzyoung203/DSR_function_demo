@@ -184,7 +184,7 @@ func _refill_ammo() -> void:
 	var player := _player()
 	if player == null:
 		return
-	var slots := player.get_node_or_null("WeaponSlots")
+	var slots := player.get_node_or_null("Equipment")
 	if slots != null and slots.has_method(&"refill_all_ammo"):
 		slots.refill_all_ammo()
 

@@ -27,13 +27,16 @@ SUITES = {
     "combat": (DIRECTORY, COMBAT_TESTS),
     "enemy": (DIRECTORY / "enemy", ENEMY_TESTS),
 }
-TIMEOUTS = {"enemy_squad_runtime_test": 180, "enemy_cooperation_flank_runtime_test": 300, "cooperation_runtime_test": 180,
-            "enemy_team_awareness_levels_runtime_test": 240, "enemy_team_support_execution_test": 240}
+TIMEOUTS = {"squad_command_runtime_test": 180}
 
 # These entries need their documented harness; never glob-run every .gd file.
 SPECIAL = {
+    "shotgun_pattern_editor_test.gd": "standalone --editor --max-fps 60 --script; also --headless --script with -- --preview-runtime; captures editor UI when rendered",
+    "shotgun_inspector_test.gd": "standalone --headless --editor --script",
     "bake_arena.gd": "maintenance command: writes navigation; never a regression",
+    "bake_levels.gd": "maintenance command: writes level navigation; never a regression",
     "presentation_fixture.gd": "fixture used by presentation tests",
+    "interaction_fixture.gd": "optional examples explicitly assembled by interaction tests",
     "enemy/enemy_fire_fixture.gd": "fixture used by enemy tests",
     "enemy/modular_probe_action.gd": "action fixture used by modular contracts",
     "aim_mode_test.gd": "run by combat_compatibility_test",

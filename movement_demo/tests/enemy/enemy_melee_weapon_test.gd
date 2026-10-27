@@ -22,18 +22,18 @@ func _run() -> void:
 	var weapon: WeaponData = MeleeWeapon.duplicate(true)
 	check(WeaponData.new().fire_mode == WeaponData.FireMode.SEMI_AUTO and gun.fire_mode == WeaponData.FireMode.AUTOMATIC, "默认单发与旧自动武器编号保持")
 	check(weapon.fire_mode == WeaponData.FireMode.MELEE and weapon.melee_enabled, "现成近战武器通过Fire Mode配置")
-	var pool := {weapon.ammo_type: 36}
+	var pool := {weapon.get_ammo_key(): 36}
 	var ammo = Ammo.new(weapon, pool, true)
 	check(ammo.magazine_rounds == 0 and ammo.reserve_count() == 0, "近战武器没有有效弹匣和备弹")
 	check(not ammo.can_fire() and not ammo.consume_round() and not ammo.start_reload(), "即使无限备弹，近战也不能开枪或换弹")
 	ammo.advance_reload(10.0)
-	check(pool[weapon.ammo_type] == 36 and not ammo.is_reloading, "近战不改变共享备弹或推进换弹")
+	check(pool[weapon.get_ammo_key()] == 36 and not ammo.is_reloading, "近战不改变共享备弹或推进换弹")
 	DirAccess.make_dir_recursive_absolute("res://logs/melee_weapon_work")
 	var saved := ResourceSaver.save(weapon, "res://logs/melee_weapon_work/roundtrip.tres")
 	var restored: WeaponData = load("res://logs/melee_weapon_work/roundtrip.tres")
 	check(saved == OK and restored.fire_mode == WeaponData.FireMode.MELEE and restored.melee_damage == weapon.melee_damage, "Fire Mode及近战数值保存重载正确")
 
-	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
+	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").unbound_scene()
 	root.add_child(scene)
 	current_scene = scene
 	var actor = preload("res://tests/enemy/enemy_fire_fixture.gd").primary_enemy(scene)
@@ -120,7 +120,7 @@ func _run() -> void:
 	var held: WeaponData = player.combat.weapon
 	player.combat.equip_weapon(MeleeWeapon)
 	check(player.combat.weapon == held, "玩家直接装备入口拒绝纯近战并保留原枪械")
-	var slots = player.get_node("WeaponSlots")
+	var slots = player.get_node("Equipment")
 	var invalid_slot: int = 1 - slots.active_slot
 	if invalid_slot == 0: slots.primary_weapon = MeleeWeapon
 	else: slots.secondary_weapon = MeleeWeapon
@@ -129,8 +129,8 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	for has_fallback in [true, false]:
-		var configured = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
-		var configured_slots = configured.get_node("Player/WeaponSlots")
+		var configured = preload("res://tests/enemy/enemy_fire_fixture.gd").unbound_scene()
+		var configured_slots = configured.get_node("Player/Equipment")
 		configured_slots.primary_weapon = MeleeWeapon
 		configured_slots.secondary_weapon = gun if has_fallback else MeleeWeapon
 		configured_slots.starting_slot = 0

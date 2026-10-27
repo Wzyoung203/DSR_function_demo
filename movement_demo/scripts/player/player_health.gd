@@ -1,6 +1,6 @@
 extends CanvasLayer
 
-## 有效命中先通知战斗模块；Debug 无敌仅免除扣血。
+## 通用有效命中通知，医疗中断等仍订阅此信号；武器效果由携带攻击快照的独立入口处理。
 signal hit_received(damage: float)
 ## 结算后通知表现层；无敌不产生 damage_applied，但保留上方的原通知。
 signal damage_applied(damage: float)
@@ -45,6 +45,7 @@ func _ready() -> void:
 	$Debug.visible = OS.is_debug_build()
 	invincible_toggle.toggled.connect(_set_debug_invincible)
 	$Debug/Controls/NoiseRanges.toggled.connect($NoiseRanges.set_enabled)
+	$NoiseRanges.set_enabled($Debug/Controls/NoiseRanges.button_pressed)
 	debug_settings.changed.connect(_apply_debug_mode)
 	debug_settings.set_enabled(debug_mode)
 	_apply_debug_mode(debug_settings.enabled)

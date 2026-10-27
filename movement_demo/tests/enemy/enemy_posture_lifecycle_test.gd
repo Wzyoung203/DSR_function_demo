@@ -47,7 +47,7 @@ func _run() -> void:
 			check(restored.get_movement_noise_radius(true) == 6.0, "new zero-base configuration retains its multiplier after reload")
 		source.free()
 		restored.free()
-	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
+	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").unbound_scene()
 	root.add_child(scene)
 	current_scene = scene
 	var enemy = preload("res://tests/enemy/enemy_fire_fixture.gd").primary_enemy(scene)
@@ -72,7 +72,7 @@ func _run() -> void:
 		enemy._physics_process(1.0 / 60.0)
 		check(enemy.body_motion.progress == progress, "each physics frame advances vault at most once")
 	check(enemy.global_position.y > 1.0, "interruption occurs above the wall")
-	enemy.receive_melee_hit(0.0, enemy.global_position - Vector3.RIGHT, 0.5, 0.2)
+	enemy.receive_melee_hit(0.0, enemy.global_position - Vector3.RIGHT, 0.5, 0.2, Vector3.FORWARD, {"melee": true, "hit_accuracy_loss": 1.0})
 	for frame in 120:
 		await physics_frame
 		enemy._physics_process(1.0 / 60.0)
@@ -103,7 +103,7 @@ func _run() -> void:
 
 func _blocked_landings() -> void:
 	for sample in [[-1.0, false], [1.0, false], [1.0, true]]:
-		var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
+		var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").unbound_scene()
 		root.add_child(scene)
 		current_scene = scene
 		var enemy = preload("res://tests/enemy/enemy_fire_fixture.gd").primary_enemy(scene)

@@ -25,6 +25,12 @@ func _run() -> void:
 	await create_timer(1.0).timeout
 	while EditorInterface.get_resource_filesystem().is_scanning():
 		await process_frame
+	await _squad_scoring_controls()
+	if OS.get_cmdline_user_args().has("--scoring-only"):
+		print("SQUAD SCORING INSPECTOR: %d/%d passed" % [checks - failed, checks])
+		quit(1 if failed else 0)
+		return
+	_squad_profile_resources()
 	var host := Member.new()
 	var unit = preload("res://scripts/enemy/enemy_unit_type.gd").new()
 	unit.name = "UnitType"
@@ -102,10 +108,12 @@ func _run() -> void:
 	area.team_cooperation_bindings.append(binding)
 	panel.refresh(true)
 	var shared = _find(panel, "团队协作")
-	check(shared != null and shared.disabled and shared.button_pressed and shared.text.contains("小队"), "绑定后团队协作由小队提供且不能单独取消")
+	check(shared != null and not shared.disabled and not shared.button_pressed, "小队指挥权限不自动解锁个人可选协作战术")
+	panel._toggle(true, training.profile, &"cooperate")
 	before = training.profile.selected_tactics.duplicate()
 	panel._toggle(false, training.profile, &"cooperate")
-	check(training.profile.selected_tactics == before, "继承权限不会改写个人训练")
+	check(not training.profile.selected_tactics.has(&"cooperate"), "个人可以独立取消可选协作战术")
+	panel._toggle(true, training.profile, &"cooperate")
 	check(standalone.team_binding().is_empty(), "独立训练资源预览不虚构所属小队")
 	manager.create_action("更改整队团队意识", UndoRedo.MERGE_DISABLE, binding.profile)
 	manager.add_do_property(binding.profile, &"level", 0)
@@ -157,7 +165,7 @@ func _run() -> void:
 	var loaded_a = reloaded.get_node("SquadA")
 	var loaded_b = reloaded.get_node("SquadB")
 	check(loaded_a.profile.level == 2 and loaded_b.profile.level == 0 and loaded_a.profile != loaded_b.profile, "重载保留各队等级及独立配置")
-	check(loaded_a.coordinator != loaded_b.coordinator and loaded_a.coordinator._coordination_plans.is_empty(), "重载重新创建独立运行状态而不序列化计划")
+	check(loaded_a.coordinator != loaded_b.coordinator and loaded_a.coordinator._tasks.is_empty(), "重载重新创建独立运行状态而不序列化计划")
 	reloaded.free()
 	saved_root.free()
 	host.reparent(area, false)
@@ -173,6 +181,69 @@ func _run() -> void:
 
 func _checks(panel) -> Array:
 	return panel.rows.get_children().filter(func(child): return child is CheckBox)
+
+func _squad_scoring_controls() -> void:
+	var profile = preload("res://scripts/enemy/config/cooperation_settings.gd").new()
+	profile.level = 1
+	EditorInterface.edit_resource(profile)
+	for frame in 30: await process_frame
+	EditorInterface.get_inspector().expand_all_folding()
+	for frame in 10: await process_frame
+	var properties := {}
+	_collect_scoring_properties(EditorInterface.get_inspector(), profile, properties)
+	var labels := {"score_cover_preference": "掩体偏好", "score_action_cost_weight": "行动代价权重", "score_fire_continuity_weight": "持续火力权重",
+		"score_crossfire_weight": "交叉火力权重", "score_melee_support_weight": "远近协同权重", "score_search_support_weight": "搜索掩护权重"}
+	for key in labels:
+		check(properties.has(key) and properties[key].get_label() == labels[key], "真实检查器显示中文团队评分字段：" + labels[key])
+		check(properties.has(key) and _has_score_tooltip(properties[key]), "实际数值控件的说明包含生效模式与默认值：" + labels[key])
+	if properties.has("score_cover_preference"):
+		properties.score_cover_preference.emit_changed(&"score_cover_preference", 1.8)
+		for frame in 10: await process_frame
+		check(is_equal_approx(profile.score_cover_preference, 1.8), "原生属性控件实际写入掩体偏好")
+		var bridge := EditorPlugin.new()
+		var manager = bridge.get_undo_redo()
+		var history = manager.get_history_undo_redo(manager.get_object_history_id(profile))
+		check(history.undo() and is_equal_approx(profile.score_cover_preference, 1.35), "原生撤销恢复默认掩体偏好")
+		check(history.redo() and is_equal_approx(profile.score_cover_preference, 1.8), "原生重做恢复修改的掩体偏好")
+		bridge.free()
+	EditorInterface.get_inspector().edit(null)
+	for frame in 10: await process_frame
+
+func _collect_scoring_properties(node: Node, profile: Resource, result: Dictionary) -> void:
+	if node is EditorProperty and node.get_edited_object() == profile:
+		result[String(node.get_edited_property())] = node
+	for child in node.get_children(): _collect_scoring_properties(child, profile, result)
+
+func _has_score_tooltip(node: Node) -> bool:
+	if (node is EditorSpinSlider or node is LineEdit) and node.tooltip_text.contains("仅普通／强配合") and node.tooltip_text.contains("默认"): return true
+	return node.get_children().any(func(child): return _has_score_tooltip(child))
+
+func _squad_profile_resources() -> void:
+	var squad = preload("res://scripts/world/squad_controller.gd").new()
+	var binding = preload("res://scripts/enemy/config/team_cooperation_binding.gd").new()
+	check(ProjectSettings.get_global_class_list().any(func(item): return item["class"] == "EnemyCooperationSettings"), "新建资源菜单可找到配合配置类型")
+	for owner_object in [squad, binding]:
+		var properties: Array = owner_object.get_property_list().filter(func(item): return item.name == "profile")
+		var property: Dictionary = properties[0]
+		check(property.hint == PROPERTY_HINT_RESOURCE_TYPE and property.hint_string == "EnemyCooperationSettings", "节点和旧绑定的 Profile 都是配置资源槽而非 GDScript 槽")
+		var picker := EditorResourcePicker.new()
+		picker.base_type = property.hint_string
+		check(picker.get_allowed_types().has("EnemyCooperationSettings") and not picker.get_allowed_types().has("GDScript"), "原生资源选择器筛选配合配置而非脚本")
+		for name in ["intel_only", "tactical", "coordinated"]:
+			var preset = load("res://resources/enemy/cooperation/%s.tres" % name)
+			picker.edited_resource = preset
+			owner_object.profile = picker.edited_resource
+			check(preset.get_script().get_global_name() == "EnemyCooperationSettings" and owner_object.profile == preset, "三个已有预设兼容原生选择器和 Profile 赋值：" + name)
+		picker.free()
+	var source = load("res://resources/enemy/cooperation/tactical.tres")
+	squad.profile = source.duplicate(true)
+	squad.profile.level = 2
+	check(source.level == 1 and squad.profile != source, "设为独立配置后改等级不会覆盖共享预设")
+	var path := "res://logs/cooperation_profile_roundtrip.tres"
+	check(ResourceSaver.save(squad.profile, path) == OK, "自定义配合配置可保存为新的 tres")
+	var reloaded = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	check(reloaded.get_script().get_global_name() == "EnemyCooperationSettings" and reloaded.level == 2, "重载自定义预设保留资源类型和等级")
+	squad.free()
 
 func _find(panel, prefix: String):
 	for box in _checks(panel):

@@ -2,6 +2,7 @@ extends "res://scripts/enemy/services/enemy_memory.gd"
 
 ## 只提供公共能力、记忆和事件；不持有 AI 控制器或可选动作实例。
 signal reevaluate
+signal command_query_requested(request: Dictionary)
 signal event_received(event: StringName, data: Dictionary)
 var actor: CharacterBody3D
 var player: Node3D
@@ -25,11 +26,11 @@ var permitted: Dictionary = {}
 var utility_current: Dictionary = {}
 var utility_horizon_seconds := 4.0
 var utility_fire_weight := 3.0
-var utility_risk_weight := 3.0
+var utility_risk_weight := 4.0
 var utility_information_weight := 1.0
-var utility_cooperation_weight := 4.0
 var utility_threat_half_life_seconds := 4.0
 var tactical_map
+var vault_navigation
 var cooperation
 var squad_node: Node
 var squad_coordinator
@@ -37,15 +38,16 @@ var _spawn_arena: WeakRef
 var area_changed_this_refresh := false
 var team_visual_contact := false
 var _shared_visual: Dictionary = {}
+var _shared_noise_id := 0
 var _shared_notification_position := Vector3.INF
 var _cooperation_identity: Array = []
 var _coordination_configuration_revision := 0
 var _coordination_environment_revision := 0
 var _coordination_environment_signature: Array = []
 var _coordination_reservation: Dictionary = {}
-var _coordination_execution: Dictionary = {}
-var _coordination_pending_assignment: Dictionary = {}
-var _coordination_execution_completed := false
+var _coordination_available_at := 0.0
+var _coordination_busy_action: StringName = &""
+var _coordination_busy_reason: StringName = &""
 var _inspection_shared_report_id := -1
 var _inspection_notification_id := -1
 var avoid_position := Vector3.INF
@@ -73,6 +75,7 @@ func setup(body: CharacterBody3D, perception_node: Node, selection_node: Node) -
 	if body.has_signal(&"ally_path_blocked") and not body.is_connected(&"ally_path_blocked", _on_ally_path_blocked):
 		body.connect(&"ally_path_blocked", _on_ally_path_blocked)
 	actor = body
+	actor.headshot_protection_query = has_headshot_protection
 	routes.context = self
 	agent = body.get_node("NavigationAgent3D")
 	refresh_environment()
@@ -83,29 +86,33 @@ func setup(body: CharacterBody3D, perception_node: Node, selection_node: Node) -
 	last_seen_position = body.global_position
 
 func setting(section: StringName, key: StringName, fallback: Variant = null, unit_defaults: Dictionary = {}) -> Variant:
-	if section == &"cooperation" and cooperation != null and cooperation.has_team_binding(self):
-		return cooperation.team_setting(self, key, fallback, unit_defaults)
+	if section == &"cooperation":
+		if cooperation != null and cooperation.has_team_binding(self):
+			return cooperation.team_setting(self, key, fallback, unit_defaults)
+		# 无绑定的个人行为仍使用情报/间距默认值，不回读旧训练配置。
+		return unit_defaults.get(key, fallback)
 	return training.setting(section, key, fallback, unit_defaults) if training != null else unit_defaults.get(key, fallback)
+
+func has_headshot_protection() -> bool:
+	return bool(setting(&"tactics", &"headshot_protection", false))
+
 
 func team_cooperation_abilities() -> Dictionary:
 	return cooperation.team_abilities(self) if cooperation != null else {}
 
 func cooperation_level() -> int:
 	if cooperation == null: return 0
-	return cooperation.team_level(self, 2 if can_use_action(&"cooperate") else 0)
+	return cooperation.team_level(self)
 
 func coordinated_cooperation_enabled() -> bool:
 	return cooperation_enabled() and cooperation_level() == 2
 
 func cooperation_member_count() -> int:
-	if squad_coordinator != null: return squad_coordinator.registered_member_count()
-	return cooperation.registered_member_count() if cooperation != null else 0
+	var coordinator = _coordinator()
+	return coordinator.registered_member_count() if coordinator != null else 0
 
 func _coordinator():
-	if cooperation == null: return null
-	if not cooperation.has_method("coordinator_for"): return cooperation
-	if squad_coordinator == null or squad_coordinator.environment != cooperation:
-		squad_coordinator = cooperation.coordinator_for(self)
+	squad_coordinator = cooperation.coordinator_for(self) if cooperation != null else null
 	return squad_coordinator
 
 func get_tree() -> SceneTree:
@@ -137,6 +144,7 @@ func refresh_environment() -> bool:
 		navigation_region = navigation
 		cooperation = environment.get("cooperation")
 		tactical_map = environment.get("tactical_map")
+		vault_navigation = environment.get("vault_navigation")
 		if _spawn_arena == null or _spawn_arena.get_ref() != owner_arena:
 			_spawn_position = actor.global_position
 			_spawn_arena = weakref(owner_arena) if owner_arena != null else null
@@ -160,6 +168,7 @@ func refresh_environment() -> bool:
 
 
 func detach_environment() -> void:
+	spawn_search_hint.clear()
 	_clear_coordination_memory()
 	_blocked_ally_paths.clear()
 	if spatial != null: spatial.clear_cover_preparation()
@@ -172,6 +181,7 @@ func detach_environment() -> void:
 	squad_node = null
 	squad_coordinator = null
 	tactical_map = null
+	vault_navigation = null
 	_shared_visual.clear()
 	_shared_notification_position = Vector3.INF
 	team_visual_contact = false
@@ -234,6 +244,7 @@ func _known_reload_threat() -> Vector3:
 	return last_known_position if is_alerted and last_known_position.is_finite() else noise_search_origin
 
 func update_evidence(delta: float, visible: bool) -> void:
+	var acquired := visible and not was_seeing_player
 	sees_player = visible
 	evidence_elapsed_seconds += maxf(0.0, delta)
 	_expire_ally_path_blocks()
@@ -269,8 +280,7 @@ func update_evidence(delta: float, visible: bool) -> void:
 		invalidate_utility()
 	perception.update_close_cover(delta)
 	was_seeing_player = visible
-	_update_cooperation_evidence()
-	_publish_coordination_evidence()
+	_update_cooperation_evidence(acquired)
 	if state == State.IDLE:
 		patrol_pause_timer = maxf(0.0, patrol_pause_timer - delta)
 
@@ -311,16 +321,30 @@ func _investigate_attack(position: Vector3) -> void:
 	event_received.emit(&"threat", {"position": last_known_position})
 	invalidate_utility()
 
-func notice_shot(origin: Vector3, endpoint: Vector3) -> void:
+## 攻击武器只提供基础值，三个受方倍率只从本敌人的训练配置读取。
+func apply_weapon_hit(effects: Dictionary) -> void:
+	actor.apply_aim_penalty(_scaled_attack_loss(float(effects.get("hit_accuracy_loss", 0.0)), &"hit_accuracy_loss_multiplier"), effects.get("melee", false))
+	actor.apply_hit_slowdown(_scaled_attack_loss(float(effects.get("hit_speed_loss", 0.0)), &"hit_speed_loss_multiplier"),
+		float(effects.get("hit_speed_loss_seconds", 0.0)))
+
+func _scaled_attack_loss(base: float, key: StringName) -> float:
+	var multiplier: float = setting(&"tactics", key, 1.0)
+	if not is_finite(base) or not is_finite(multiplier): return 0.0
+	return clampf(maxf(0.0, base) * maxf(0.0, multiplier), 0.0, 1.0)
+
+func notice_shot(origin: Vector3, endpoint: Vector3, effects: Dictionary) -> void:
 	if not is_arena_active() or actor.is_dead:
 		return
+	var radius: float = effects.get("near_miss_radius", 0.0)
+	if not is_finite(radius) or radius <= 0.0: return
 	var chest: Vector3 = actor.get_torso_position()
 	var closest := Geometry3D.get_closest_point_to_segment(chest, origin, endpoint)
-	if chest.distance_to(closest) > float(setting(&"cover", &"shot_radius", 1.5)) or not cover_selection.has_clear_line(chest, closest):
+	if chest.distance_to(closest) > radius or not cover_selection.has_clear_line(chest, closest):
 		return
 	_investigate_attack(Vector3(origin.x, actor.global_position.y, origin.z))
 	nearby_shot_pressure = minf(1.0, nearby_shot_pressure + 0.15)
-	event_received.emit(&"near_shot", {})
+	actor.apply_aim_penalty(_scaled_attack_loss(float(effects.get("suppression_accuracy_loss", 0.0)), &"suppression_accuracy_loss_multiplier"))
+	event_received.emit(&"near_shot", effects.duplicate())
 	invalidate_utility()
 
 func resume_after_action(_visible: bool, _position: Vector3) -> void:
@@ -394,6 +418,7 @@ func is_ally_path_blocked(from: Vector3, path: PackedVector3Array) -> bool:
 	return false
 
 func reset_memory() -> void:
+	spawn_search_hint.clear()
 	_clear_coordination_memory()
 	_blocked_ally_paths.clear()
 	_inspection_shared_report_id = -1
@@ -633,13 +658,14 @@ func _record_cover_inspection(evidence: Dictionary, cover: Object = null) -> voi
 		"id": evidence.get("id", 0), "source": evidence.get("source", &""),
 		"captured_at": captured, "valid_until": captured + maxf(0.1, float(setting(&"cooperation", &"cover_inspection_seconds", 20.0))),
 		"observer_position": evidence.get("observer_position", actor.global_position),
-		"cover": weakref(cover) if is_instance_valid(cover) else null}
+		"cover": weakref(cover) if is_instance_valid(cover) else null,
+		"direction": last_seen_direction, "velocity": observed_velocity}
 	if clue.target_id == 0 or evidence_elapsed_seconds >= clue.valid_until: return
-	if cooperation != null: cooperation.publish_inspection(self, clue)
+	if _coordinator() != null: _coordinator().report_inspection(self, clue)
 
 func _receive_shared_inspection() -> void:
-	if not coordinated_cooperation_enabled() or sees_player: return
-	var clue: Dictionary = cooperation.inspection_evidence(self, cooperation_target_id())
+	if cooperation == null or sees_player: return
+	var clue: Dictionary = _coordinator().shared_inspection(self)
 	if clue.is_empty() or int(clue.id) == _inspection_notification_id: return
 	_inspection_notification_id = int(clue.id)
 	if int(clue.get("observer_id", 0)) == actor.get_instance_id(): return
@@ -656,8 +682,8 @@ func _receive_shared_inspection() -> void:
 	invalidate_utility()
 
 func cover_inspection_evidence() -> Dictionary:
-	if not coordinated_cooperation_enabled() or sees_player: return {}
-	var clue: Dictionary = cooperation.inspection_evidence(self, cooperation_target_id())
+	if cooperation == null or sees_player: return {}
+	var clue: Dictionary = _coordinator().shared_inspection(self)
 	if not clue.is_empty():
 		var offset: float = evidence_elapsed_seconds - cooperation.elapsed
 		clue.captured_at = float(clue.captured_at) + offset
@@ -667,14 +693,31 @@ func cover_inspection_evidence() -> Dictionary:
 	return clue if clue.get("target_id", 0) == cooperation_target_id() and evidence_elapsed_seconds < float(clue.get("valid_until", -INF)) else {}
 
 func cooperation_enabled() -> bool:
-	return cooperation != null and cooperation_level() > 0 and can_use_action(&"cooperate") and not actor.is_dead
+	return commanded()
 
 func has_combat_contact() -> bool:
 	return has_visual_memory or team_visual_contact
 
+## 只接收本轮出生情报，不将其广播为声音或视觉，不更新真实目击记录。
+func receive_spawn_search_hint(hint: Dictionary) -> bool:
+	if not spawn_search_hint.is_empty() or actor.is_dead or not is_arena_active(): return false
+	if hint.get("source") != &"wave_spawn" or hint.get("target_id", 0) != cooperation_target_id(): return false
+	var position: Vector3 = hint.get("position", Vector3.INF)
+	if not position.is_finite(): return false
+	spawn_search_hint = hint.duplicate(true)
+	if not has_combat_contact():
+		last_known_position = position
+		is_alerted = true
+		event_received.emit(&"spawn_search", spawn_search_hint.duplicate(true))
+	invalidate_utility()
+	return true
+
 ## Shared contact authorizes a combat approach, never personal sight or firing.
 func fresh_shared_contact() -> Dictionary:
 	if sees_player: return {}
+	# A frozen radio report is no longer ongoing contact once everyone lost
+	# sight. Investigation uses its own evidence without authorizing combat moves.
+	if not cover_inspection_evidence().is_empty(): return {}
 	var report: Dictionary = cooperation_target_evidence()
 	if not report.get("shared", false) or report.get("source", &"") != &"shared_visual": return {}
 	if report.get("target_id", 0) != cooperation_target_id() or not report.get("position", Vector3.INF).is_finite(): return {}
@@ -714,7 +757,7 @@ func cooperation_target_evidence() -> Dictionary:
 		"captured_at": personal_time, "valid_until": personal_time + float(setting(&"cooperation", &"intel_seconds", 5.0)),
 		"id": 0, "source": &"visual", "shared": false, "confidence": pow(0.5, utility_unseen_seconds / maxf(0.1, utility_threat_half_life_seconds))}
 
-func _update_cooperation_evidence() -> void:
+func _update_cooperation_evidence(acquired: bool = false) -> void:
 	if cooperation == null: return
 	var identity := [cooperation.get_instance_id(), EnemyTeamCooperationBinding.effective_faction(actor), EnemyTeamCooperationBinding.effective_communication_group(actor), cooperation_target_id(), cooperation.generation, cooperation.relation_revision]
 	if identity != _cooperation_identity:
@@ -728,9 +771,19 @@ func _update_cooperation_evidence() -> void:
 		_inspection_notification_id = -1
 		_cooperation_identity = identity
 		cooperation.register(self)
-	if sees_player: cooperation.publish_visual(self)
+	if sees_player: _coordinator().report_visual(self, acquired)
+	if not sees_player:
+		var noise: Dictionary = _coordinator().shared_noise(self)
+		if not noise.is_empty() and noise.id != _shared_noise_id:
+			_shared_noise_id = noise.id
+			if not has_visual_memory or noise.captured_at > cooperation.elapsed - utility_unseen_seconds:
+				noise_search_origin = noise.position
+				last_known_position = noise.position
+				is_alerted = true
+				event_received.emit(&"noise", {"position": noise.position, "shared": true})
+				invalidate_utility()
 	_receive_shared_inspection()
-	var report: Dictionary = cooperation.evidence(self, cooperation_target_id())
+	var report: Dictionary = _coordinator().shared_visual(self)
 	if report.is_empty(): return
 	# Convert the common arena clock without rejuvenating the original observation.
 	var offset: float = evidence_elapsed_seconds - cooperation.elapsed
@@ -742,9 +795,9 @@ func _update_cooperation_evidence() -> void:
 		_shared_visual = report # Re-map original timestamps if this individual was inactive.
 		return
 	_shared_visual = report
-	if cooperation_enabled() and cooperation_member_count() > 1 and not sees_player and int(report.id) != _inspection_shared_report_id:
+	if cooperation.registered_member_count() > 1 and not sees_player and not _coordinator().has_visual_contact(self) and int(report.id) != _inspection_shared_report_id:
 		_inspection_shared_report_id = int(report.id)
-		var active: Dictionary = cooperation.inspection_evidence(self, cooperation_target_id())
+		var active: Dictionary = _coordinator().shared_inspection(self)
 		# Alternating observers can publish every frame. A live frozen round
 		# already identifies this cover; do not repeat its geometry query.
 		if active.is_empty() or active.position.distance_to(report.position) >= 0.5:
@@ -761,14 +814,17 @@ func _update_cooperation_evidence() -> void:
 	if sees_player: return
 	var personal_time: float = evidence_elapsed_seconds - utility_unseen_seconds
 	if has_visual_memory and float(report.captured_at) < personal_time: return
-	var changed: bool = first_contact or not _shared_notification_position.is_finite() or _shared_notification_position.distance_to(report.position) >= 0.5
+	var reacquired: bool = int(report.get("contact_id", 0)) > int(old.get("contact_id", 0))
+	var changed: bool = reacquired or first_contact or not _shared_notification_position.is_finite() or _shared_notification_position.distance_to(report.position) >= 0.5
 	last_known_position = report.position
 	is_alerted = true
 	noise_search_origin = Vector3.INF
 	utility_threat_age_seconds = maxf(0.0, evidence_elapsed_seconds - float(report.captured_at))
 	if changed:
 		_shared_notification_position = report.position
-		event_received.emit(&"cooperation_intel", report.duplicate(true))
+		var notification := report.duplicate(true)
+		notification.reacquired = reacquired
+		event_received.emit(&"cooperation_intel", notification)
 		invalidate_utility()
 
 var _cooperation_preview_snapshot: Dictionary = {}
@@ -776,7 +832,7 @@ var _cooperation_preview_depth := 0
 var _cooperation_preview_sources: Dictionary = {}
 
 ## Candidate collection is read-only: share one observation across this batch,
-## then discard it before action validation, claims or physical execution.
+## then discard it before action validation, reservations or physical execution.
 func begin_cooperation_preview() -> void:
 	if _cooperation_preview_depth == 0:
 		_cooperation_preview_sources.clear()
@@ -791,123 +847,49 @@ func end_cooperation_preview() -> void:
 		_cooperation_preview_sources.clear()
 
 func cooperation_snapshot(target_id: int = 0) -> Dictionary:
-	if cooperation == null: return {"members": [], "requests": [], "claims": [], "supports": [], "threats": [], "revision": 0}
+	if cooperation == null: return {"members": [], "physical_members": [], "requests": [], "supports": [], "threats": [], "revision": 0}
 	if not _cooperation_preview_snapshot.is_empty() and (target_id == 0 or target_id == cooperation_target_id()): return _cooperation_preview_snapshot
 	return cooperation.snapshot(self, cooperation_target_id() if target_id == 0 else target_id)
 
 
-## The existing candidate preview already shares a read-only observation.
-## Outside that scope, support timing reads fresh requests and fire windows.
-func cooperation_support_snapshot() -> Dictionary:
-	if cooperation == null: return {"requests": [], "supports": []}
-	if not _cooperation_preview_snapshot.is_empty(): return _cooperation_preview_snapshot
-	return cooperation.support_snapshot(self, cooperation_target_id())
-
-func cooperation_claim(task: Dictionary) -> Dictionary:
-	return _coordinator().claim(self, task) if cooperation_enabled() else {}
-
-func cooperation_update(token: Dictionary, status: Dictionary) -> bool:
-	return _coordinator().update_claim(self, token, status) if cooperation != null else false
-
-func cooperation_release(token: Dictionary) -> void:
-	if cooperation != null: _coordinator().release(self, token)
-
-func cooperation_search_available(point: Vector3, radius: float = 1.0) -> bool:
-	return _coordinator().search_available(self, point, radius) if cooperation != null else true
-
-func cooperation_claim_search(point: Vector3, duration: float = 6.0) -> Dictionary:
-	if not coordinated_cooperation_enabled(): return {}
-	return cooperation_claim({"target_id": cooperation_target_id(), "kind": &"search", "position": point, "duration": duration,
-		"owner_action": utility_current.get("id", &"search"), "radius": float(setting(&"cooperation", &"search_claim_radius", 1.0))})
+func cooperation_search_available(point: Vector3, _radius: float = 0.0) -> bool:
+	return cooperation.search_available(self, point) if cooperation != null else true
 
 func cooperation_publish_checked(points: PackedVector3Array) -> void:
-	if coordinated_cooperation_enabled() and not noise_search_origin.is_finite(): cooperation.publish_checked(self, points)
+	if _coordinator() != null and not noise_search_origin.is_finite(): _coordinator().report_checked(self, points)
 
 func cooperation_checked_points() -> Array[Dictionary]:
-	if not coordinated_cooperation_enabled() or noise_search_origin.is_finite(): return []
-	var points: Array[Dictionary] = cooperation.checked_points(self)
+	if _coordinator() == null or noise_search_origin.is_finite(): return []
+	var points: Array[Dictionary] = _coordinator().shared_checked(self)
 	var offset: float = evidence_elapsed_seconds - cooperation.elapsed
 	for item in points:
 		item.observed_at += offset
 		item.valid_until += offset
 	return points
 
-func cooperation_reload_opportunity() -> Dictionary:
-	return _coordinator().reload_opportunity(self) if coordinated_cooperation_enabled() else {"allowed": false, "support_seconds": 0.0, "provider_id": 0, "request_id": 0}
-
-func cooperation_claim_reload(duration: float) -> Dictionary:
-	if not cooperation_reload_opportunity().allowed: return {}
-	return cooperation_claim({"kind": &"reload", "lane_id": &"reload", "target_id": cooperation_target_id(), "position": actor.global_position,
-		"owner_action": utility_current.get("id", &"reload"), "duration": duration})
-
-func cooperation_candidate_seconds(candidate: Dictionary) -> float:
-	return _coordinator().candidate_seconds(self, candidate) if cooperation_enabled() else 0.0
-
-func cooperation_support_pressure() -> float:
-	return _coordinator().support_pressure(self) if cooperation_enabled() else 0.0
-
-func cooperation_clear_execution(reason: StringName = &"switch") -> void:
-	if not _coordination_execution_completed and not _coordination_execution.is_empty() and _coordination_pending_assignment.get("assignment_id") != _coordination_execution.get("assignment_id"):
-		report_coordination_execution({"valid": false, "segment_boundary": true},
-			&"self_preservation" if reason == &"self_preservation" else &"unavailable", reason)
+func cooperation_clear_execution(_reason: StringName = &"switch") -> void:
 	if cooperation != null: cooperation.clear_execution(actor.get_instance_id())
 	_coordination_reservation = {}
-	_coordination_execution = {}
-	_coordination_execution_completed = false
 
 func _clear_coordination_memory() -> void:
+	_coordination_available_at = 0.0
+	_coordination_busy_action = &""
+	_coordination_busy_reason = &""
 	_coordination_reservation = {}
-	_coordination_execution = {}
-	_coordination_pending_assignment = {}
-	_coordination_execution_completed = false
 	_coordination_environment_signature.clear()
 
-## Called outside the selector's synchronous read-only evaluation. Context never
-## holds or calls action instances; AI verifies each action's escape permission.
 func coordination_assignment() -> Dictionary:
-	if cooperation == null or not coordinated_cooperation_enabled() or cooperation_member_count() <= 1 or not cooperation.has_method("assignment"): return {}
-	return _coordinator().assignment(self)
-
-func coordination_decision_revision() -> int:
-	if cooperation == null or not cooperation.has_team_binding(self) or not coordinated_cooperation_enabled() or not cooperation.has_method("assignment_decision_revision"): return 0
-	return _coordinator().assignment_decision_revision(self)
-
-func coordination_support_state() -> Dictionary:
-	return _coordinator().assignment_support(self) if coordinated_cooperation_enabled() else {}
-
-func coordination_recommendation() -> Dictionary:
-	return _coordinator().recommendation(self) if cooperation_enabled() and cooperation_level() == 1 else {}
+	return _coordinator().assignment(self) if commanded() and _coordinator() != null else {}
 
 func prepare_coordination_evaluation() -> void:
-	if cooperation != null and cooperation_member_count() > 1: _publish_coordination_versions()
-
-func coordination_offer_identity() -> Dictionary:
-	return cooperation.coordination_identity(self) if cooperation != null and cooperation_enabled() else {}
-
-func coordination_source(target_id: int = 0) -> Dictionary:
-	if cooperation == null or not cooperation_enabled() or not cooperation.has_method("coordination_source"): return {}
-	if _cooperation_preview_depth == 0: return _coordinator().coordination_source(self, target_id)
-	# Only candidate collection shares this immutable observation. Execution,
-	# submission and the next batch still query the live coordinator.
-	if not _cooperation_preview_sources.has(target_id):
-		_cooperation_preview_sources[target_id] = _coordinator().coordination_source(self, target_id)
-	return _cooperation_preview_sources[target_id].duplicate(true)
-
-## Static templates remain hints; Actions validate them through Spatial.
-func coordination_search_templates(origin: Vector3, radius: float, layers: int, limit: int = 6) -> Array[Dictionary]:
-	return tactical_map.query_sectors(origin, radius, layers, limit) if tactical_map != null and coordinated_cooperation_enabled() else []
-
-func coordination_search_template_valid(key: String, source_revision: int, navigation_revision: int) -> bool:
-	return tactical_map != null and tactical_map.navigation_revision() == navigation_revision and tactical_map.template_valid(key, source_revision)
+	# Public body/position reservations also protect actors outside a Squad.
+	if cooperation != null and cooperation.registered_member_count() > 1: _publish_coordination_versions()
 
 func coordination_search_revision() -> int:
 	return tactical_map.revision() if tactical_map != null else 0
 
-func coordination_checked_points(target_id: int = 0) -> Array[Dictionary]:
-	return _coordinator().coordination_checked_points(self, target_id) if cooperation_enabled() else []
-
 func advance_coordination_map(max_points: int, deadline_usec: int, frame: int) -> int:
-	if tactical_map == null or not coordinated_cooperation_enabled() or cooperation_member_count() <= 1: return 0
+	if tactical_map == null or not commanded(): return 0
 	return int(tactical_map.advance_preparation(max_points, deadline_usec, frame).points)
 
 func coordination_now() -> float:
@@ -916,148 +898,58 @@ func coordination_now() -> float:
 ## Forward only already acquired reports, with their original identities/times.
 ## Team planning evidence never grants this actor personal firing permission.
 func publish_coordination_noise(position: Vector3) -> void:
-	if cooperation == null or not cooperation.has_method("publish_noise_source"): return
-	_coordinator().publish_noise_source(self, position)
+	if _coordinator() != null: _coordinator().report_noise(self, position)
 
-func _publish_coordination_evidence() -> void:
-	if cooperation == null or cooperation_member_count() <= 1 or not cooperation.has_method("publish_coordination_source"): return
-	if not _shared_visual.is_empty() and float(_shared_visual.get("valid_until", 0.0)) > evidence_elapsed_seconds:
-		_coordinator().publish_coordination_source(self, {"source_id": int(_shared_visual.id), "source": &"shared_visual",
-			"target_id": cooperation_target_id(), "position": _shared_visual.position,
-			"captured_at": _shared_visual.captured_at, "valid_until": _shared_visual.valid_until})
-		# A captured observation also becomes a frozen planning clue. This uses
-		# the existing investigation lifetime; it never modifies precise intel,
-		# personal sight, suppression evidence or the original capture timestamp.
-		_coordinator().publish_coordination_source(self, {"source_id": int(_shared_visual.id), "source": &"observation_memory",
-			"target_id": cooperation_target_id(), "position": _shared_visual.position,
-			"captured_at": _shared_visual.captured_at,
-			"valid_until": float(_shared_visual.captured_at) + maxf(0.1, float(setting(&"cooperation", &"cover_inspection_seconds", 20.0)))})
-	var inspection := cover_inspection_evidence()
-	if not inspection.is_empty():
-		_coordinator().publish_coordination_source(self, {"source_id": int(inspection.id), "source": &"inspection",
-			"target_id": cooperation_target_id(), "position": inspection.position,
-			"captured_at": inspection.captured_at, "valid_until": inspection.valid_until})
-
-func publish_coordination_offers(options: Array[Dictionary], offers: Array[Dictionary]) -> void:
-	if cooperation == null or not cooperation.has_method("submit_offers") or not _publish_coordination_versions(): return
-	var by_key: Dictionary = {}
-	for candidate in options:
-		var key: String = candidate.get("coordination_offer_key", "")
-		if not key.is_empty() and is_finite(float(candidate.get("cost", INF))): by_key[key] = candidate
-	var roles: Dictionary = {}
-	var inspected := 0
-	for raw in offers:
-		inspected += 1
-		if inspected > 32: break
-		var key: String = raw.get("offer_key", "")
-		if not by_key.has(key): continue
-		var candidate: Dictionary = by_key[key]
-		if raw.get("owner_action") != candidate.get("id"): continue
-		var offer := raw.duplicate(true)
-		offer.cost = candidate.cost
-		offer.cooperation_weight = maxf(0.0, utility_cooperation_weight)
-		offer.scored_cooperation_seconds = maxf(0.0, float(candidate.get("breakdown", {}).get("cooperation_seconds", 0.0)))
-		var role: StringName = offer.get("role", &"")
-		if not roles.has(role): roles[role] = []
-		roles[role].append(offer)
-	var role_keys: Array = roles.keys()
-	role_keys.sort()
-	for role in role_keys:
-		roles[role].sort_custom(func(a, b): return a.cost < b.cost if a.cost != b.cost else String(a.offer_key) < String(b.offer_key))
-	var selected: Array = []
-	# First preserve complementary roles, then add their best alternatives.
-	while selected.size() < 6:
-		var added := false
-		for role in role_keys:
-			if selected.size() >= 6: break
-			if roles[role].is_empty(): continue
-			selected.append(roles[role].pop_front())
-			added = true
-		if not added: break
-	_coordinator().submit_offers(self, selected)
-
-func assignment_requires_transition(next: Dictionary, _current: Dictionary) -> bool:
-	var assignment: Dictionary = next.get("coordination_assignment", {})
-	if assignment.is_empty(): return not _coordination_execution.is_empty()
-	return not _same_coordination_execution(assignment) or next.get("coordination_offer_key", "") != _coordination_execution.get("selected_offer_key", "")
-
-func _same_coordination_execution(assignment: Dictionary) -> bool:
-	if assignment.is_empty() or _coordination_execution.is_empty(): return false
-	for key in [&"generation", &"team_id", &"plan_id", &"assignment_id", &"assignment_revision", &"owner_action"]:
-		if assignment.get(key) != _coordination_execution.get(key): return false
-	return assignment.get("accepted", false)
-
-func coordination_continuation(contract: Dictionary, owner: StringName) -> bool:
-	var assignment := coordination_assignment()
-	return contract.get("valid", false) and owner == assignment.get("owner_action") and _same_coordination_execution(assignment)
-
-func report_coordination_execution(contract: Dictionary, state: StringName = &"", reason: StringName = &"") -> bool:
-	var assignment := coordination_assignment()
-	if not _same_coordination_execution(assignment): return false
-	if state.is_empty():
-		if not contract.get("valid", false): state = &"unavailable"
-		else: state = &"complete" if contract.get("complete", false) else (&"arrived" if contract.get("ready_for_phase", false) else &"moving")
-	var report := assignment.duplicate()
-	report.merge({"state": state,
-		"reason": reason, "position": actor.global_position, "progress": float(contract.get("progress", 0.0)),
-		"segment_boundary": contract.get("segment_boundary", true), "ready_for_phase": contract.get("ready_for_phase", false),
-		"execution_valid": contract.get("valid", false), "checked_points": contract.get("checked_points", PackedVector3Array())}, true)
-	var accepted: bool = _coordinator().report_assignment(self, report)
-	if accepted and state == &"complete": _coordination_execution_completed = true
-	return accepted
-
-## Basic coordination changes candidate eligibility, never its utility cost.
-## An actor already standing somewhere can still defend itself while LocalMotion
-## resolves physical spacing. Only proposed destinations acquire new occupancy.
-func coordination_choices(options: Array[Dictionary]) -> Array[Dictionary]:
-	var basic := _basic_coordination_choices(options)
-	if coordinated_cooperation_enabled() and cooperation.has_team_binding(self):
-		var baseline: Dictionary = {}
-		for candidate: Dictionary in basic:
-			if candidate.has("coordination_role") or not is_finite(float(candidate.get("cost", INF))): continue
-			if baseline.is_empty() or float(candidate.cost) < float(baseline.cost):
-				var outcome: Dictionary = candidate.get("outcome", {})
-				baseline = {"cost": float(candidate.cost), "horizon": utility_horizon_seconds,
-					"unavailable_seconds": float(outcome.get("unavailable_seconds", utility_horizon_seconds)),
-					"exposed_seconds": float(outcome.get("exposed_seconds", 0.0)), "information_loss": float(outcome.get("information_loss", 0.0))}
-		if not baseline.is_empty():
-			# A hurt member's first defensive alternatives must enter comparison
-			# before the squad commits it to a long maneuver. Personal AI continues
-			# while the same finite spatial queue prepares those alternatives.
-			baseline.preparation_ready = not (sees_player and can_use_action(&"covering_retreat") and _reload_risk_aversion() > 0.01 and spatial.initial_preparation_pending(&"shelter_geometry"))
-		_coordinator().publish_personal_baseline(self, baseline)
-	var assignment := coordination_assignment()
-	if assignment.is_empty():
-		var independent: Array[Dictionary] = []
-		var advice := coordination_recommendation()
-		for candidate in basic:
-			if candidate.has("coordination_role"):
-				if advice.is_empty() or candidate.get("id") != advice.get("owner_action") or not advice.allowed_offer_keys.has(candidate.get("coordination_offer_key", "")): continue
-				var advised := candidate.duplicate()
-				advised.erase("coordination_assignment")
-				advised.coordination_recommendation = advice
-				independent.append(advised)
-				continue
-			var choice := candidate.duplicate() if candidate.has("coordination_assignment") else candidate
-			choice.erase("coordination_assignment")
-			independent.append(choice)
-		return independent
-	var result: Array[Dictionary] = []
-	for candidate in basic:
-		if candidate.get("assignment_escape_verified", false):
-			var escape := candidate.duplicate()
-			escape.erase("coordination_assignment")
-			escape.erase("coordination_role")
-			escape.erase("coordination_offer_key")
-			result.append(escape)
-			continue
-		if candidate.get("id") != assignment.get("owner_action") or not assignment.get("allowed_offer_keys", []).has(candidate.get("coordination_offer_key", "")): continue
-		var choice := candidate.duplicate()
-		choice.coordination_assignment = assignment
-		result.append(choice)
+func coordination_debug_snapshot() -> Dictionary:
+	if not is_instance_valid(actor) or actor.is_dead or not is_arena_active(): return {}
+	var result: Dictionary = _coordinator().debug_member_snapshot(self) if _coordinator() != null else {}
+	result.actor_id = actor.get_instance_id()
+	result.name = str(actor.name)
+	result.position = actor.global_position
+	result.action = utility_current.get("id", &"none")
+	# Execution facts are separate from planning status. An unassigned member
+	# can still be searching, firing or reloading through the same personal AI.
+	result.cooperation_level = cooperation_level()
+	result.moving = not actor.get_local_movement_velocity().is_zero_approx() or Vector2(actor.velocity.x, actor.velocity.z).length_squared() > 0.0025
+	result.reloading = actor.ammo.is_reloading
+	result.reload_remaining = actor.ammo.reload_remaining_seconds() if actor.weapon != null and actor.ammo.is_reloading else 0.0
+	var availability := coordination_motion_state()
+	result.available_in = availability.available_in
+	if availability.available_in > 0.0: result.reason = availability.availability_reason
+	var destination: Variant = utility_current.get("destination", {})
+	result.personal_goal = utility_current.get("route_target", destination.get("position", destination.get("hide", Vector3.INF))) if destination is Dictionary else Vector3.INF
+	if result.moving and not result.personal_goal.is_finite(): result.personal_goal = agent.target_position
+	# Reading the agent's existing path does not request or advance navigation.
+	# Only show it for an actually moving personal action with this same goal.
+	if not commanded() and result.get("route", PackedVector3Array()).is_empty() and result.moving and result.personal_goal.is_finite() and agent.target_position.distance_to(result.personal_goal) < 0.1:
+		var path := agent.get_current_navigation_path()
+		var index := agent.get_current_navigation_path_index()
+		if index >= 0 and index < path.size():
+			result.route = PackedVector3Array([actor.global_position])
+			result.route.append_array(path.slice(index))
 	return result
 
-func _basic_coordination_choices(options: Array[Dictionary]) -> Array[Dictionary]:
+func observation_debug_snapshot() -> Dictionary:
+	return _coordinator().coverage_debug_snapshot() if _coordinator() != null else {}
+
+## Public physical facts for squad planning. No action instance or private
+## state machine is exposed; capability changes are read on every query.
+func coordination_motion_state() -> Dictionary:
+	var collision: CollisionShape3D = actor.get_node("CollisionShape3D")
+	var radius: float = collision.shape.radius * maxf(collision.global_basis.x.length(), collision.global_basis.z.length())
+	var available_in := maxf(0.0, _coordination_available_at - evidence_elapsed_seconds)
+	return {"actor_id": actor.get_instance_id(), "position": actor.global_position,
+		"velocity": actor.velocity, "radius": radius, "move_speed": actor.move_speed,
+		"spacing_margin": float(setting(&"cooperation", &"spacing_margin", 0.45)),
+		"available_in": available_in, "availability_reason": _coordination_busy_reason if available_in > 0.0 else &"",
+		"movable": available_in <= 0.0 and actor.can_move() and not actor.is_dead and not actor.is_vaulting() and not actor.melee_active}
+
+## Local route feasibility is queried through Context, independently of which
+## installed action will later accept and execute the squad's task.
+func coordinated_stationary_members() -> Array:
+	return _coordinator().member_ids() if commanded() else []
+
+func personal_position_choices(options: Array[Dictionary]) -> Array[Dictionary]:
 	if cooperation == null or cooperation.registered_member_count() <= 1 or not _publish_coordination_versions():
 		var independent_choices: Array[Dictionary] = []
 		for candidate in options:
@@ -1126,12 +1018,6 @@ func _basic_coordination_offer(candidate: Dictionary, prepared_identity: Variant
 ## Prepare follows the action's live validate and precedes clearing its old
 ## execution. The pending token survives that clear; begin failure only rolls it back.
 func prepare_coordination_choice(candidate: Dictionary) -> Dictionary:
-	var assignment: Dictionary = candidate.get("coordination_assignment", {})
-	if not assignment.is_empty():
-		if cooperation == null or not cooperation.has_method("prepare_assignment"): return {"required": true, "token": {}}
-		var token: Dictionary = _coordinator().prepare_assignment(self, assignment, candidate.get("coordination_offer_key", ""))
-		_coordination_pending_assignment = assignment if not token.is_empty() else {}
-		return {"required": true, "token": token, "assignment": assignment}
 	var offer: Dictionary = candidate.get("coordination_offer", {})
 	if offer.is_empty() or cooperation == null or cooperation.registered_member_count() <= 1: return {"required": false, "token": {}}
 	var path: PackedVector3Array = candidate.get("destination", {}).get("path", PackedVector3Array())
@@ -1142,40 +1028,30 @@ func prepare_coordination_choice(candidate: Dictionary) -> Dictionary:
 		previous = point
 	if path.is_empty(): length = _horizontal_distance(offer.position)
 	var duration := clampf(length / maxf(0.1, actor.move_speed) + utility_horizon_seconds, 4.0, 30.0)
-	var advice: Dictionary = candidate.get("coordination_recommendation", {})
-	if not advice.is_empty():
-		return {"required": true, "token": _coordinator().prepare_recommendation(self, advice, candidate.get("coordination_offer_key", ""), offer, duration), "recommendation": advice}
 	return {"required": true, "token": cooperation.prepare_reservation(self, offer, duration)}
 
 func commit_coordination_choice(transaction: Dictionary) -> bool:
 	if not transaction.get("required", false): return true
 	var token: Dictionary = transaction.get("token", {})
-	var assignment: Dictionary = transaction.get("assignment", {})
-	if not assignment.is_empty():
-		if cooperation == null or token.is_empty() or not _coordinator().commit_assignment(self, assignment, token): return false
-		_coordination_execution = coordination_assignment()
-		_coordination_pending_assignment = {}
-		_coordination_execution_completed = false
-		return not _coordination_execution.is_empty()
 	if cooperation == null or token.is_empty(): return false
-	if not transaction.get("recommendation", {}).is_empty():
-		if not _coordinator().accept_recommendation(self, transaction.recommendation, token): return false
-	elif not cooperation.commit_reservation(self, token): return false
+	if not cooperation.commit_reservation(self, token): return false
 	_coordination_reservation = token
 	return true
 
 func rollback_coordination_choice(transaction: Dictionary) -> void:
-	if not transaction.get("assignment", {}).is_empty():
-		if cooperation != null: _coordinator().rollback_assignment(self, transaction.assignment, transaction.get("token", {}))
-		_coordination_pending_assignment = {}
-		return
 	if cooperation != null and transaction.get("required", false): cooperation.rollback_reservation(self, transaction.get("token", {}))
 
 ## A continuing, already begun and currently validated action may acquire a new
 ## basic lease after its previous one expires. Existing leases never gain time.
+## Dynamic personal destinations use the existing basic lease, never a team
+## permission or a second reservation. Preparation remains read-only elsewhere.
+func maintain_personal_destination(candidate: Dictionary) -> bool:
+	if cooperation == null: return true
+	var choice := candidate.duplicate()
+	choice.coordination_offer = _basic_coordination_offer(choice)
+	return maintain_coordination_choice(choice)
+
 func maintain_coordination_choice(candidate: Dictionary) -> bool:
-	if not candidate.get("coordination_assignment", {}).is_empty():
-		return _same_coordination_execution(coordination_assignment()) and candidate.get("coordination_offer_key", "") == _coordination_execution.get("selected_offer_key", "")
 	var offer: Dictionary = candidate.get("coordination_offer", {})
 	if cooperation == null: return true
 	if offer.is_empty() or cooperation.registered_member_count() <= 1:
@@ -1232,5 +1108,99 @@ func cooperation_publish_execution(output: Dictionary) -> void:
 		"magazine_capacity": actor.weapon.magazine_capacity if firearms else 0, "can_move": actor.can_move(), "lane_id": &"target",
 		"position_lane_id": task.get("lane_id", &""),
 		"beneficiary_id": task.get("beneficiary_id", 0), "request_id": task.get("request_id", 0),
-		"support_request": utility_current.get("support_request", {}),
-		"reload_seconds": actor.weapon.reload_seconds * (1.0 - actor.ammo.reload_progress) if firearms and actor.ammo.is_reloading else 0.0})
+		"reload_seconds": actor.ammo.reload_remaining_seconds() if firearms and actor.ammo.is_reloading else 0.0})
+
+
+var _battle_capabilities: Dictionary = {}
+var command_action_states: Dictionary = {}
+
+func prepare_command_offers(query: Dictionary, cursor: Dictionary, deadline: int) -> Dictionary:
+	var request := {"kind": &"prepare", "query": query, "cursor": cursor, "deadline": deadline,
+		"result": {"done": true, "cursor": {}, "offers": [], "reasons": {}}}
+	command_query_requested.emit(request)
+	return request.result
+
+func validate_command_offer(offer: Dictionary, profile: Dictionary) -> bool:
+	if offer.has("profile_id") and offer.profile_id != profile.get("profile_id"): return false
+	var query := {"profile": profile, "body": member_runtime_snapshot(),
+		"objective": {"position": offer.get("look_position", actor.global_position), "objective_id": offer.get("objective_id", 0)},
+		"previous": coordination_assignment()}
+	var request := {"kind": &"validate", "query": query, "offer": offer,
+		"result": {"valid": false, "reason": &"executor_unavailable"}}
+	command_query_requested.emit(request)
+	return bool(request.result.get("valid", false))
+
+func commanded() -> bool:
+	return cooperation != null and cooperation.has_team_binding(self) and cooperation_level() > 0
+
+## AI publishes only successfully instantiated actions, after equipment setup.
+func install_member_capabilities(value: Dictionary) -> void:
+	_battle_capabilities = value.duplicate(true)
+
+func member_capability_snapshot() -> Dictionary:
+	return _battle_capabilities.duplicate(true)
+
+func command_melee_enabled() -> bool:
+	return bool(_battle_capabilities.get("weapon", {}).get("melee_enabled", false))
+
+func member_runtime_snapshot() -> Dictionary:
+	var result := coordination_motion_state()
+	result.merge({"visible": sees_player, "health": actor.health,
+		"action_states": command_action_states.duplicate(true), "observed_reload": observed_reload_window(),
+		"fire_lane_valid": sees_player and last_seen_aim_position.is_finite(),
+		"pressure": recent_damage_pressure + nearby_shot_pressure,
+		"rounds": actor.ammo.magazine_rounds, "can_reload": actor.can_use_firearms() and actor.ammo.can_reload(),
+		"reloading": actor.ammo.is_reloading, "reload_remaining": actor.ammo.reload_remaining_seconds() if actor.weapon != null and actor.ammo.is_reloading else 0.0,
+		"occupied": actor.is_vaulting() or actor.melee_active or not actor.can_move(),
+		"firearms": actor.can_use_firearms(), "can_attack": actor.shooting_enabled and not actor.is_vaulting() and not actor.melee_active,
+		"blocked_paths": _blocked_ally_paths.size()}, true)
+	return result
+
+func validate_command_post(task: Dictionary, profile: Dictionary) -> bool:
+	var action: StringName = task.get("action", &"")
+	if profile.is_empty() or not profile.get("ready", false) or not can_use_action(action): return false
+	if not profile.actions.has(action) or not profile.actions[action].roles.has(task.get("role")): return false
+	if not task.get("position", Vector3.INF).is_finite(): return false
+	if task.role in [&"reload", &"support"] and not actor.can_use_firearms(): return false
+	var path: PackedVector3Array = task.get("route", PackedVector3Array())
+	if task.has("route_plan") and not preload("res://scripts/enemy/services/enemy_navigation_route.gd").current(self, task.route_plan): return false
+	return not path.is_empty() and _horizontal_distance_between(path[-1], task.position) <= 0.1
+
+func command_observation_valid(task: Dictionary) -> bool:
+	if task.get("observation_mode") != &"sweep" and _horizontal_distance(task.get("position", Vector3.INF)) > 0.18: return false
+	var point: Vector3 = task.get("look_position", Vector3.INF)
+	return preload("res://scripts/enemy/services/enemy_visual_observation.gd").visible(self, point)
+
+func command_observation_progress(task: Dictionary) -> Dictionary:
+	return _coordinator().observation_progress(self, task) if commanded() else {}
+
+func accept_command(task: Dictionary) -> bool:
+	return commanded() and _coordinator().accept(self, task)
+
+func report_command(task: Dictionary, state: StringName, facts: Dictionary = {}) -> bool:
+	if not commanded(): return false
+	var report := task.duplicate(true)
+	report.merge(facts, true)
+	report.merge({"state": state, "position": actor.global_position, "velocity": actor.velocity}, true)
+	return _coordinator().report(self, report)
+
+func command_permission(task: Dictionary) -> Dictionary:
+	return _coordinator().motion_permission(self, task) if commanded() else {"allowed": false, "waiting_for": []}
+
+func command_support_pressure() -> float:
+	return _coordinator().support_demand(self) if commanded() else 0.0
+
+func command_memory_fire_authorized(intent: Dictionary) -> bool:
+	var task := coordination_assignment()
+	if task.get("action") != intent.get("owner") or not task.get("accepted", false) or task.get("state") in [&"blocked", &"complete"]: return false
+	if task.get("attack") != &"frozen_personal_evidence": return false
+	var ability: Dictionary = _battle_capabilities.get("actions", {}).get(task.action, {})
+	if not ability.get("attack_modes", []).has(&"frozen_personal_evidence"): return false
+	var basis: Dictionary = task.get("fire_evidence", {})
+	var id: int = basis.get("id", 0)
+	if id <= 0 or id != suppression_consumed_id or id != int(suppression_evidence.get("id", 0)) or id != int(intent.get("evidence_id", 0)): return false
+	if basis.get("source") != &"visual_loss" or basis.get("shared", false) or evidence_elapsed_seconds >= float(basis.get("valid_until", -INF)): return false
+	if basis.get("valid_until") != suppression_evidence.get("valid_until") or basis.get("position") != suppression_evidence.get("position"): return false
+	if basis.get("aim_position", Vector3.INF) != suppression_evidence.get("aim_position", Vector3.INF): return false
+	var point: Vector3 = intent.get("point", Vector3.INF)
+	return point.is_finite() and point.distance_to(basis.aim_position) <= maxf(0.0, float(task.get("fire_radius", 0.0))) + 0.01

@@ -10,10 +10,14 @@ var relation_revision := 0
 var _serial := 0
 var _members: Dictionary = {}
 var _reports: Dictionary = {}
+var _noise_reports: Dictionary = {}
+var _squad_reservations: Dictionary = {}
+var _intel_router
 var _checked: Dictionary = {}
 var _relations: Dictionary = {}
 var _inspection_reports: Dictionary = {}
 var _reservations: Dictionary = {}
+var _vault_transits: Dictionary = {}
 var _member_serial := 0
 var _teams: Dictionary = {}
 var _team_by_member: Dictionary = {}
@@ -26,15 +30,24 @@ var _team_config_serial := 0
 ## A reservation carries no tactical assignment or permission to execute a body.
 const MAX_BASIC_RESERVATION_SECONDS := 30.0
 
-## Explicit squads own their tactical state; this adapter serves legacy members.
-var _legacy_coordinator = SquadCoordination.new()
+## Explicit scene squads own their coordinator. Old binding resources are
+## converted to the same service only when they explicitly configure a team.
+var _binding_coordinators: Dictionary = {}
 var _squads: Dictionary = {}
 var last_advance_usec := 0
 var last_region_usec := 0
 
-func _init() -> void:
-	_legacy_coordinator.bind_environment(self)
+## Area-wide identities share one sequence across observations and leases.
+## Allocating an identity does not publish a change or renew any deadline.
+func allocate_coordination_id() -> int:
+	_serial += 1
+	return _serial
 
+func notify_coordination_changed() -> void:
+	revision += 1
+
+## Validate a frozen observation without exposing the area's mutable report.
+## -1 means invalid; 0 is a valid report without a renewed-contact identity.
 func coordinator_for(context):
 	if context != null and is_instance_valid(context.actor):
 		var member: Dictionary = _members.get(context.actor.get_instance_id(), {})
@@ -45,10 +58,15 @@ func coordinator_for(context):
 		if member.is_empty():
 			var squad := EnemyTeamCooperationBinding.squad_for_member(context.actor)
 			if squad != null: return register_squad(squad)
-	return _legacy_coordinator
+	if _binding_coordinators.has(_team_setting_key(context)): return _binding_coordinators[_team_setting_key(context)]
+	if _intel_router == null:
+		_intel_router = SquadCoordination.new()
+		_intel_router.bind_environment(self)
+	return _intel_router
 
 func _coordinators() -> Array:
-	var result: Array = [_legacy_coordinator]
+	var result: Array = _binding_coordinators.values()
+	if _intel_router != null: result.append(_intel_router)
 	for entry: Dictionary in _squads.values():
 		var node = entry.node.get_ref()
 		if is_instance_valid(node): result.append(node.coordinator)
@@ -103,13 +121,6 @@ func _squad_id(actor: Node) -> int:
 	return squad.get_instance_id() if squad != null else 0
 
 ## Diagnostic values only. Runtime reservation code never reads squad plans.
-func coordination_debug_snapshot(field: StringName) -> Dictionary:
-	var result: Dictionary = {}
-	for coordinator in _coordinators():
-		var value = coordinator.get(field)
-		if value is Dictionary: result.merge(value.duplicate(true))
-	return result
-
 func configure_team_bindings(bindings: Array) -> void:
 	var fingerprints: Array = []
 	for binding in bindings: fingerprints.append(binding.fingerprint() if binding is EnemyTeamCooperationBinding else 0)
@@ -143,7 +154,16 @@ func configure_team_bindings(bindings: Array) -> void:
 		if _members[id].get("squad_id", 0) != 0: continue
 		if not changed.has(_members[id].domain): continue
 		release_member(id)
-		_drop_coordination_plan(int(_team_by_member.get(id, 0)), &"team_configuration")
+	for key in _binding_coordinators.keys():
+		if not changed.has(key): continue
+		_binding_coordinators[key].reset()
+		if not next.has(key): _binding_coordinators.erase(key)
+	for key in next:
+		if not _binding_coordinators.has(key):
+			var coordinator = SquadCoordination.new()
+			coordinator.bind_environment(self)
+			_binding_coordinators[key] = coordinator
+		if changed.has(key): _binding_coordinators[key].configure_profile(next[key])
 	_team_settings = next
 	_rebuild_teams()
 	revision += 1
@@ -178,13 +198,10 @@ func team_abilities(context) -> Dictionary:
 	var settings: Dictionary = _team_settings[key]
 	return {"level": settings.level, "squad_key": key, "team_config_revision": _team_setting_versions[key], "diagnostic": settings.diagnostic}
 
-func team_level(context, legacy_level: int = 0) -> int:
-	if _team_settings.is_empty() and _direct_area_member(context): return legacy_level
+func team_level(context) -> int:
 	var squad := _squad_for_context(context)
-	if squad != null: return int(register_squad(squad).configuration.get("level", legacy_level))
-	if _team_settings.is_empty(): return legacy_level
-	var settings: Dictionary = _team_settings.get(_team_setting_key(context), {})
-	return int(settings.get("level", legacy_level))
+	if squad != null: return int(register_squad(squad).configuration.get("level", 0))
+	return int(_team_settings.get(_team_setting_key(context), {}).get("level", 0))
 
 func team_configuration_revision(context) -> int:
 	if _team_setting_versions.is_empty() and _direct_area_member(context): return 0
@@ -232,13 +249,18 @@ func _rebuild_teams() -> void:
 		next[key] = team
 		for id: int in group: _team_by_member[id] = int(team.team_id)
 	_teams = next
-	var legacy_members: Dictionary = {}
-	var legacy_mapping: Dictionary = {}
-	for id: int in ids:
-		if _members[id].get("squad_id", 0) == 0:
-			legacy_members[id] = _members[id]
-			legacy_mapping[id] = _team_by_member.get(id, 0)
-	_legacy_coordinator.sync_members(legacy_members, _teams, legacy_mapping)
+	for key in _binding_coordinators:
+		var members: Dictionary = {}
+		var mapping: Dictionary = {}
+		var teams: Dictionary = {}
+		for id: int in ids:
+			if _members[id].get("squad_id", 0) != 0 or _members[id].domain != key: continue
+			members[id] = _members[id]
+			mapping[id] = _team_by_member.get(id, 0)
+		for team_key in _teams:
+			var matching: Array = _teams[team_key].members.filter(func(id): return members.has(id))
+			if not matching.is_empty(): teams[team_key] = {"team_id": _teams[team_key].team_id, "members": matching}
+		_binding_coordinators[key].sync_members(members, teams, mapping)
 	for squad_id: int in _squads:
 		var entry: Dictionary = _squads[squad_id]
 		var node = entry.node.get_ref()
@@ -274,7 +296,8 @@ func publish_member_versions(context, versions: Dictionary) -> bool:
 		changed = changed or member[key] != versions[key]
 	if not changed: return true
 	_release_member_reservations(context.actor.get_instance_id(), true)
-	coordinator_for(context).invalidate_member(context.actor.get_instance_id())
+	var coordinator = coordinator_for(context)
+	if coordinator != null: coordinator.invalidate_member(context.actor.get_instance_id())
 	for key in [&"config_revision", &"environment_revision", &"navigation_revision"]: member[key] = versions[key]
 	member.versions_published = true
 	revision += 1
@@ -347,7 +370,6 @@ func _reservation_offer_valid(context, offer: Dictionary) -> bool:
 	return offer.captured_at >= 0.0 and offer.captured_at <= context.evidence_elapsed_seconds and offer.valid_until > context.evidence_elapsed_seconds
 
 func _reservation_valid(entry: Dictionary) -> bool:
-	if entry.get("scope") == &"tactical" and not _tactical_reservation_valid(entry): return false
 	var context = _context(int(entry.owner_id))
 	if not _reservation_member_valid(context) or entry.generation != generation or entry.expires_at <= elapsed: return false
 	if int(entry.get("team_config_revision", 0)) != team_configuration_revision(context): return false
@@ -389,15 +411,15 @@ func _reservation_lane_crosses(footprint: Dictionary, lane: Dictionary) -> bool:
 
 func _reservation_position_available(context, entry: Dictionary, except_id: int = 0) -> bool:
 	var owner: int = context.actor.get_instance_id()
+	for reserved in _squad_obstacles(context):
+		if _reservation_geometry_conflict(entry, reserved): return false
 	var current := entry.duplicate()
 	current.merge(_reservation_footprint(context, entry.position), true)
-	if entry.get("scope") == &"tactical": current.path_summary = _coordination_physical_summary(context, entry.get("path_summary", {}), entry.target_id)
 	for other: Dictionary in _reservations.values():
 		if other.reservation_id == except_id or other.owner_id == owner or not _reservation_valid(other) or not can_share_space(owner, other.owner_id): continue
 		for projection: Dictionary in _reservation_projections(other):
 			var actual := projection.duplicate()
 			actual.merge(_reservation_footprint(_context(other.owner_id), projection.position), true)
-			if other.get("scope") == &"tactical": actual.path_summary = _coordination_physical_summary(_context(other.owner_id), projection.get("path_summary", {}), other.target_id)
 			if _reservation_geometry_conflict(current, actual): return false
 	for id: int in _members:
 		if id == owner or not can_share_space(owner, id): continue
@@ -421,7 +443,6 @@ func _reservation_obstacles(context, except_id: int = 0) -> Array[Dictionary]:
 		for projection: Dictionary in _reservation_projections(other):
 			var actual := projection.duplicate()
 			actual.merge(_reservation_footprint(_context(other.owner_id), projection.position), true)
-			if other.get("scope") == &"tactical": actual.path_summary = _coordination_physical_summary(_context(other.owner_id), projection.get("path_summary", {}), other.target_id)
 			obstacles.append(actual)
 	for id: int in _members:
 		if id == owner or not can_share_space(owner, id): continue
@@ -433,6 +454,7 @@ func _reservation_obstacles(context, except_id: int = 0) -> Array[Dictionary]:
 			var endpoint: Vector3 = status.get("aim_position", Vector3.INF)
 			if endpoint.is_finite(): body.path_summary = {"firing_lane": {"origin": other.actor.get_shot_origin(), "endpoint": endpoint}}
 		obstacles.append(body)
+	obstacles.append_array(_squad_obstacles(context))
 	return obstacles
 
 ## Candidate filtering is read-only. Callers keep no-destination personal
@@ -556,6 +578,7 @@ func advance(delta: float) -> void:
 	var started := Time.get_ticks_usec()
 	refresh_squads()
 	elapsed += maxf(0.0, delta)
+	_expire_vault_transits()
 	for id in _members.keys():
 		var context = _context(id)
 		if context == null or not is_instance_valid(context.actor) or not context.actor.is_inside_tree() or context.actor.is_dead:
@@ -569,16 +592,19 @@ func advance(delta: float) -> void:
 			_reservations.erase(reservation_id)
 			revision += 1
 	last_region_usec = Time.get_ticks_usec() - started
-	_legacy_coordinator.advance()
+	for coordinator in _binding_coordinators.values(): coordinator.advance()
 	for entry: Dictionary in _squads.values():
 		var node = entry.node.get_ref()
 		if is_instance_valid(node): node.advance_from_area(Engine.get_physics_frames())
 	last_advance_usec = Time.get_ticks_usec() - started
 
 func reset() -> void:
+	_vault_transits.clear()
 	generation += 1
 	elapsed = 0.0
 	_reports.clear()
+	_noise_reports.clear()
+	_squad_reservations.clear()
 	_checked.clear()
 	_inspection_reports.clear()
 	_reservations.clear()
@@ -600,6 +626,11 @@ func register(context) -> bool:
 			"member_generation": _member_serial, "versions_published": false, "config_revision": 0, "environment_revision": 0, "navigation_revision": 0}
 		_rebuild_teams()
 		revision += 1
+	elif not _team_by_member.has(id) and can_cooperate(id, id):
+		# A body may have revived while its registration was retained. Rejoin
+		# the existing explicit team without renewing any previous task.
+		_rebuild_teams()
+		revision += 1
 	return changed
 
 func unregister(id: int) -> void:
@@ -610,7 +641,11 @@ func unregister(id: int) -> void:
 	revision += 1
 
 func release_member(id: int) -> void:
-	coordinator_for(_context(id)).release_member(id)
+	var transit: Dictionary = _vault_transits.get(id, {})
+	var body = transit.get("actor").get_ref() if transit.has("actor") else null
+	if not is_instance_valid(body) or not body.is_vaulting(): _vault_transits.erase(id)
+	var coordinator = coordinator_for(_context(id))
+	if coordinator != null: coordinator.release_member(id)
 	_release_member_reservations(id, true)
 	if _members.has(id): _members[id].status = {}
 	revision += 1
@@ -620,7 +655,6 @@ func release_member(id: int) -> void:
 
 func clear_execution(id: int) -> void:
 	_release_member_reservations(id, false)
-	coordinator_for(_context(id)).clear_execution(id)
 	if _members.has(id):
 		var status: Dictionary = _members[id].status
 		if not status.is_empty():
@@ -628,9 +662,6 @@ func clear_execution(id: int) -> void:
 			status.support_seconds = 0.0
 			status.support_cycle_valid = false
 			status.support_resume_seconds = -1.0
-			status.support_request = {}
-			status.erase("support_request_id")
-			status.erase("support_request_id_signature")
 	# updated_at remains the time of the real publication, not this cancellation.
 	revision += 1
 
@@ -641,6 +672,32 @@ func _context(id: int):
 
 func registered_member_count() -> int:
 	return _members.size()
+
+## Execution-only capsule corridors, separate from destination/task ownership.
+func acquire_vault_transit(context, segment: Dictionary) -> bool:
+	_expire_vault_transits()
+	var id: int = context.actor.get_instance_id()
+	if _vault_transits.has(id): return _vault_transits[id].key == segment.link_key
+	var radius: float = context.actor.get_node("CollisionShape3D").shape.radius
+	for owner in _vault_transits:
+		var other: Dictionary = _vault_transits[owner]
+		var closest := Geometry3D.get_closest_points_between_segments(segment.entry, segment.exit, other.entry, other.exit)
+		if other.key == segment.link_key or Vector2(closest[0].x - closest[1].x, closest[0].z - closest[1].z).length() < radius + float(other.radius) + 0.1: return false
+	_vault_transits[id] = {"actor": weakref(context.actor), "key": segment.link_key, "entry": segment.entry, "exit": segment.exit, "radius": radius, "created": elapsed, "airborne": false}
+	return true
+
+func release_vault_transit(context) -> void:
+	if not context.actor.is_vaulting(): _vault_transits.erase(context.actor.get_instance_id())
+
+func _expire_vault_transits() -> void:
+	for id in _vault_transits.keys():
+		var entry: Dictionary = _vault_transits[id]
+		var body = entry.actor.get_ref()
+		if not is_instance_valid(body) or not body.is_inside_tree():
+			_vault_transits.erase(id)
+		elif body.is_vaulting(): entry.airborne = true
+		elif body.is_dead or entry.airborne or elapsed - float(entry.created) > 0.2:
+			_vault_transits.erase(id)
 
 func _domain(actor) -> String:
 	return JSON.stringify([String(member_faction(actor)), String(member_group(actor))])
@@ -710,7 +767,24 @@ func can_share_space(first_id: int, second_id: int) -> bool:
 	var second_faction := member_faction(second)
 	return first_faction == second_faction or _relations.get([first_faction, second_faction], &"") == &"allied"
 
-func publish_visual(context) -> void:
+## A live allied observer prevents blind members from investigating an already
+## located target. Never consult the target transform or grant personal sight.
+func has_visual_contact(context, target: int, excluded_observer: int = 0) -> bool:
+	var recent := false
+	for report: Dictionary in _reports.values():
+		if report.target_id == target and report.valid_until > elapsed and _inspection_domain_matches(context, report):
+			recent = true
+			break
+	if not recent: return false
+	for id: int in _members:
+		if id == excluded_observer: continue
+		var observer = _context(id)
+		if not _reservation_member_valid(observer) or not observer.sees_player or observer.cooperation_target_id() != target: continue
+		if not _inspection_domain_matches(context, {"faction": member_faction(observer.actor), "group": member_group(observer.actor)}): continue
+		return true
+	return false
+
+func store_visual(context, acquired: bool = false) -> void:
 	if not context.sees_player or not context.last_seen_position.is_finite(): return
 	var observer: int = context.actor.get_instance_id()
 	if not _members.has(observer): register(context)
@@ -719,45 +793,37 @@ func publish_visual(context) -> void:
 	for inspection_key in _inspection_reports.keys():
 		var investigation: Dictionary = _inspection_reports[inspection_key]
 		if investigation.target_id != target or not _inspection_domain_matches(context, investigation): continue
-		if investigation.source != &"shared_visual" or investigation.position.distance_to(context.last_seen_position) >= 0.5:
-			_inspection_reports.erase(inspection_key)
-			_drop_inspection_claims(int(investigation.id))
+		_inspection_reports.erase(inspection_key)
 	var key := _key(_members[observer].domain, target)
 	var old: Dictionary = _reports.get(key, {})
+	var renewed: bool = acquired and not has_visual_contact(context, target, observer)
 	var reloading: bool = context.observed_reload_remaining > 0.0
-	if not old.is_empty() and old.observer_id == observer and elapsed - float(old.captured_at) < 0.2 and old.position.distance_to(context.last_seen_position) < 0.1 and old.reloading == reloading:
-		_publish_visual_coordination(context, old)
+	if not renewed and not old.is_empty() and old.observer_id == observer and elapsed - float(old.captured_at) < 0.2 and old.position.distance_to(context.last_seen_position) < 0.1 and old.reloading == reloading:
 		return
 	_serial += 1
+	var contact_id := 0
+	for report: Dictionary in _reports.values():
+		if report.target_id == target and _inspection_domain_matches(context, report):
+			contact_id = maxi(contact_id, int(report.get("contact_id", 0)))
+	if renewed or contact_id == 0: contact_id = _serial
 	_reports[key] = {"target_id": target, "observer_id": observer, "faction": member_faction(context.actor), "group": member_group(context.actor),
 		"position": context.last_seen_position, "observer_position": context.actor.global_position, "aim_position": context.last_seen_aim_position, "direction": context.last_seen_direction, "velocity": context.observed_velocity,
 		"captured_at": elapsed, "valid_until": elapsed + maxf(0.1, context.setting(&"cooperation", &"intel_seconds", 5.0)),
-		"id": _serial, "generation": generation, "source": &"shared_visual", "shared": true,
+		"id": _serial, "contact_id": contact_id, "generation": generation, "source": &"shared_visual", "shared": true,
 		"reloading": reloading, "reload_until": elapsed + context.observed_reload_remaining}
 	revision += 1
-	_publish_visual_coordination(context, _reports[key])
 
 ## Personal sight is also a real source. evidence() intentionally excludes
 ## the sender, so forwarding only received radio intel would miss visible teams.
 
-func _publish_visual_coordination(context, report: Dictionary) -> void:
-	if _members.size() <= 1 or not context.cooperation_enabled(): return
-	var offset: float = context.evidence_elapsed_seconds - elapsed
-	var captured: float = float(report.captured_at) + offset
-	publish_coordination_source(context, {"source_id": int(report.id), "source": &"observation_memory",
-		"target_id": int(report.target_id), "position": report.position, "captured_at": captured,
-		"valid_until": captured + maxf(0.1, context.setting(&"cooperation", &"cover_inspection_seconds", 20.0))})
-
 func _inspection_domain_matches(context, report: Dictionary) -> bool:
 	return report.get("group") == member_group(context.actor) and (report.get("faction") == member_faction(context.actor) or _relations.get([report.get("faction"), member_faction(context.actor)], &"") == &"allied")
 
-func _drop_inspection_claims(inspection_id: int) -> void:
-	for coordinator in _coordinators(): coordinator._drop_inspection_claims(inspection_id)
-
-func publish_inspection(context, evidence: Dictionary) -> Dictionary:
+func store_inspection(context, evidence: Dictionary) -> Dictionary:
 	var target: int = int(evidence.get("target_id", 0))
 	var point: Vector3 = evidence.get("position", Vector3.INF)
 	if target == 0 or target != context.cooperation_target_id() or not point.is_finite(): return {}
+	if has_visual_contact(context, target): return {}
 	if not _members.has(context.actor.get_instance_id()): register(context)
 	var key := _key(_domain(context.actor), target)
 	var offset: float = elapsed - context.evidence_elapsed_seconds
@@ -770,7 +836,6 @@ func publish_inspection(context, evidence: Dictionary) -> Dictionary:
 	var old: Dictionary = _inspection_reports.get(key, {})
 	if not old.is_empty() and float(old.valid_until) > elapsed and int(old.cover_id) == cover_id and old.position.distance_to(point) < 0.5:
 		if evidence.get("source") == &"shared_visual" or absf(captured - float(old.captured_at)) <= 0.75: return old.duplicate(true)
-	if not old.is_empty(): _drop_inspection_claims(int(old.id))
 	_serial += 1
 	var value := evidence.duplicate(true)
 	value.merge({"id": _serial, "target_id": target, "position": point, "observer_id": context.actor.get_instance_id(),
@@ -791,27 +856,12 @@ func inspection_evidence(context, target: int) -> Dictionary:
 ## Read-only stable allocation of the two end roles. Positions rank suitable
 ## bodies; each action still proves its own exact route before taking a lease.
 
-func inspection_eligible_count(context, target: int) -> int:
-	return coordinator_for(context).inspection_eligible_count(context, target)
-
-func inspection_end(context, geometry: Dictionary) -> int:
-	return coordinator_for(context).inspection_end(context, geometry)
-
-func inspection_revision(context, inspection_id: int) -> int:
-	return coordinator_for(context).inspection_revision(context, inspection_id)
-
-func inspection_partner_ready(context, token: Dictionary) -> bool:
-	return coordinator_for(context).inspection_partner_ready(context, token)
-
-func complete_inspection(context, token: Dictionary) -> void:
-	coordinator_for(context).complete_inspection(context, token)
-
-func evidence(context, target: int) -> Dictionary:
+func read_visual(context, target: int) -> Dictionary:
 	var id: int = context.actor.get_instance_id()
 	if not _members.has(id): return {}
 	var best: Dictionary = {}
 	for report in _reports.values():
-		if report.target_id != target or report.observer_id == id: continue
+		if report.target_id != target or report.observer_id == id or not can_share_intel(int(report.observer_id), id): continue
 		if report.group != member_group(context.actor): continue
 		if report.faction != member_faction(context.actor) and _relations.get([report.faction, member_faction(context.actor)], &"") != &"allied": continue
 		if best.is_empty() or int(report.id) > int(best.id): best = report
@@ -822,17 +872,6 @@ func publish_status(context, status: Dictionary) -> void:
 	if not _members.has(id): register(context)
 	var old: Dictionary = _members[id].status
 	var entry := status.duplicate(true)
-	for kind in [&"reload", &"support"]:
-		var field: String = "%s_request_id" % kind
-		var signature: Array = [entry.get("target_id", 0), kind, entry.get("support_request", {}).get("kind", &"") if kind == &"support" else &"reload"]
-		var requested: bool = entry.get("reloading", false) if kind == &"reload" else not entry.get("support_request", {}).is_empty()
-		if requested:
-			if old.get(field + "_signature", []) != signature:
-				_serial += 1
-				entry[field] = _serial
-			else:
-				entry[field] = old[field]
-			entry[field + "_signature"] = signature
 	entry.id = id
 	entry.updated_at = elapsed
 	_members[id].status = entry
@@ -840,10 +879,6 @@ func publish_status(context, status: Dictionary) -> void:
 	# momentarily remove a living participant from the opposite-side quota.
 	_members[id].activity = {"target_id": entry.get("target_id", 0), "updated_at": elapsed}
 	var changed: bool = old.is_empty() or old.get("ready", false) != entry.get("ready", false) or old.get("reloading", false) != entry.get("reloading", false) or old.get("moving", false) != entry.get("moving", false) or old.get("target_id", 0) != entry.get("target_id", 0)
-	var old_position: Vector3 = old.get("position", Vector3.INF)
-	var new_position: Vector3 = entry.get("position", Vector3.INF)
-	if old_position.is_finite() and new_position.is_finite():
-		changed = changed or coordinator_for(context).crossed_flank(context, old_position, new_position)
 	if changed: revision += 1
 
 func snapshot(context, target: int) -> Dictionary:
@@ -856,7 +891,7 @@ func support_snapshot(context, target: int) -> Dictionary:
 
 func _snapshot(context, target: int, support_only: bool) -> Dictionary:
 	var id: int = context.actor.get_instance_id()
-	var result := {"requests": [], "supports": []} if support_only else {"members": [], "physical_members": [], "requests": [], "claims": [], "supports": [], "threats": [], "revision": revision, "generation": generation, "elapsed": elapsed}
+	var result := {"requests": [], "supports": []} if support_only else {"members": [], "physical_members": [], "requests": [], "supports": [], "threats": [], "revision": revision, "generation": generation, "elapsed": elapsed}
 	for other_id in _members:
 		if support_only and other_id == id: continue
 		var other = _context(other_id)
@@ -894,14 +929,6 @@ func _snapshot(context, target: int, support_only: bool) -> Dictionary:
 			var support: Dictionary = {"support_seconds": support_seconds, "moving": member.get("moving", false), "lane_id": member.get("lane_id", &"target")} if support_only else member.duplicate(true)
 			support.owner_id = other_id
 			result.supports.append(support)
-		if member.get("reloading", false) and other_id != id:
-			result.requests.append({"id": member.reload_request_id, "request_id": member.reload_request_id, "kind": &"reload", "target_id": target, "beneficiary_id": other_id,
-				"position": member.position, "duration": member.get("reload_seconds", 0.0), "remaining": member.get("reload_seconds", 0.0), "lane_id": &"target"})
-		var need: Dictionary = member.get("support_request", {})
-		if not need.is_empty() and other_id != id:
-			result.requests.append({"id": member.support_request_id, "request_id": member.support_request_id, "kind": need.get("kind", &"move"), "target_id": target, "beneficiary_id": other_id,
-				"position": member.position, "remaining": maxf(0.0, float(need.get("duration", 0.0))), "lane_id": need.get("lane_id", &"target")})
-	coordinator_for(context).append_snapshot(context, target, result, not support_only)
 	return result
 
 ## Physical safety spans friendly radio groups; it shares no target intelligence.
@@ -933,29 +960,14 @@ func _position_blocks_line(position: Vector3, origin: Vector3, endpoint: Vector3
 	var closest := Geometry3D.get_closest_point_to_segment(torso, origin, endpoint)
 	return Vector2(torso.x - closest.x, torso.z - closest.z).length() < 0.4 and absf(torso.y - closest.y) < 0.9
 
-## Read-only proposal. The first successful claim freezes the frame; previews
-## neither create a round nor extend its deadline.
+## Public occupancy query. Reading a destination never reserves it.
 
-func flank_opportunity(context) -> Dictionary:
-	return coordinator_for(context).flank_opportunity(context)
-
-func flank_geometry_revision(context) -> int:
-	return coordinator_for(context).flank_geometry_revision(context)
-
-func claim(context, task: Dictionary) -> Dictionary:
-	return coordinator_for(context).claim(context, task)
-
-func update_claim(context, token: Dictionary, state: Dictionary) -> bool:
-	return coordinator_for(context).update_claim(context, token, state)
-
-func release(context, token: Dictionary) -> void:
-	coordinator_for(context).release(context, token)
-
-func search_available(context, point: Vector3, radius: float) -> bool:
-	return coordinator_for(context).search_available(context, point, radius)
+func search_available(context, point: Vector3, _radius: float = 0.0) -> bool:
+	if not point.is_finite(): return false
+	return _reservation_position_available(context, _reservation_footprint(context, point))
 
 func publish_checked(context, points: PackedVector3Array) -> void:
-	if not context.cooperation_enabled(): return
+	if not _reservation_member_valid(context): return
 	var id: int = context.actor.get_instance_id()
 	var target: int = context.cooperation_target_id()
 	var domain: String = _domain(context.actor)
@@ -972,45 +984,12 @@ func checked_points(context) -> Array[Dictionary]:
 	var target: int = context.cooperation_target_id()
 	var id: int = context.actor.get_instance_id()
 	for entry in _checked.values():
-		if entry.domain == domain and entry.target_id == target and entry.observer_id != id and entry.valid_until > elapsed:
+		if entry.domain == domain and entry.target_id == target and entry.observer_id != id and entry.valid_until > elapsed and can_share_intel(entry.observer_id, id):
 			result.append(entry.duplicate(true))
 	return result
 
-func reload_opportunity(context) -> Dictionary:
-	return coordinator_for(context).reload_opportunity(context)
-
-func candidate_seconds(context, candidate: Dictionary) -> float:
-	return coordinator_for(context).candidate_seconds(context, candidate)
-
-func support_pressure(context) -> float:
-	return coordinator_for(context).support_pressure(context)
-
 func _clear_coordination() -> void:
 	for coordinator in _coordinators(): coordinator.reset()
-
-func _coordination_team(context) -> int:
-	return coordinator_for(context)._coordination_team(context)
-
-func _coordination_key(team_id: int, target_id: int) -> String:
-	return _legacy_coordinator._coordination_key(team_id, target_id)
-
-func publish_noise_source(context, position: Vector3) -> void:
-	coordinator_for(context).publish_noise_source(context, position)
-
-func publish_coordination_source(context, source: Dictionary) -> void:
-	coordinator_for(context).publish_coordination_source(context, source)
-
-func _active_coordination_source(key: String) -> Dictionary:
-	return _legacy_coordinator._active_coordination_source(key)
-
-func coordination_source(context, target_id: int = 0) -> Dictionary:
-	return coordinator_for(context).coordination_source(context, target_id)
-
-func submit_offers(context, offers: Array) -> bool:
-	return coordinator_for(context).submit_offers(context, offers)
-
-func _coordination_team_members(team_id: int) -> Array:
-	return _legacy_coordinator._coordination_team_members(team_id)
 
 func _coordination_actual(context, target_id: int) -> Dictionary:
 	var stored: Dictionary = _members[context.actor.get_instance_id()].status
@@ -1021,127 +1000,72 @@ func _coordination_actual(context, target_id: int) -> Dictionary:
 	return {"captured_at": elapsed, "valid_until": elapsed + 0.001 if not ready else minf(elapsed + remaining, float(stored.updated_at) + 0.35),
 		"fire_ready": ready, "measured_support_seconds": remaining if ready else 0.0}
 
-func _coordination_physical_summary(context, summary: Dictionary, target_id: int) -> Dictionary:
-	var result := summary.duplicate(true)
-	var footprint := _reservation_footprint(context, context.actor.global_position)
-	result.body_radius = footprint.radius
-	result.body_height = footprint.height
-	result.spacing_margin = footprint.margin
-	# Preview promises never introduce a firing line. Only an existing finite
-	# actual support fact contributes its currently legal physical segment.
-	result.erase("firing_lane")
-	if _coordination_actual(context, target_id).fire_ready:
-		var endpoint: Vector3 = _members[context.actor.get_instance_id()].status.get("aim_position", Vector3.INF)
-		if endpoint.is_finite(): result.firing_lane = {"origin": context.actor.get_shot_origin(), "endpoint": endpoint}
-	return result
-
 ## Physical occupancy spans squads and radio groups; no task authority is shared.
-func coordination_occupancy(context, horizon: float) -> Array:
-	var result: Array = []
-	var owner: int = context.actor.get_instance_id()
-	for id: int in _members:
-		var other = _context(id)
-		if not _reservation_member_valid(other) or not can_share_space(owner, id): continue
-		var footprint := _reservation_footprint(other, other.actor.global_position)
-		result.append({"actor_id": id, "kind": &"body", "position": footprint.position,
-			"captured_at": elapsed, "valid_until": elapsed + horizon,
-			"path_summary": _coordination_physical_summary(other, {}, other.cooperation_target_id())})
-	for reservation: Dictionary in _reservations.values():
-		if not _reservation_valid(reservation) or not can_share_space(owner, reservation.owner_id): continue
-		for projection: Dictionary in _reservation_projections(reservation):
-			var summary := _coordination_physical_summary(_context(reservation.owner_id), projection.get("path_summary", {}), reservation.target_id)
-			result.append({"actor_id": reservation.owner_id, "kind": &"reservation", "position": projection.position,
-				"reservation_id": reservation.reservation_id, "position_set_key": projection.position_set_key,
-				"captured_at": elapsed, "valid_until": reservation.expires_at, "path_summary": summary})
-	return result
-
-func assignment_decision_revision(context) -> int:
-	return coordinator_for(context).assignment_decision_revision(context)
-
-func _assignment_for_owner(owner_id: int) -> Dictionary:
-	return _legacy_coordinator._assignment_for_owner(owner_id)
-
-func assignment(context) -> Dictionary:
-	return coordinator_for(context).assignment(context)
-
-func assignment_support(context) -> Dictionary:
-	return coordinator_for(context).assignment_support(context)
-
 func _reservation_projections(entry: Dictionary) -> Array:
-	if entry.get("scope") == &"tactical" and entry.phase == &"pending" and entry.get("selected_offer_key", "") == "":
-		return entry.get("alternatives", [])
 	return [entry]
 
-func _tactical_reservation_valid(reservation: Dictionary) -> bool:
-	var owner = coordinator_for(_context(int(reservation.owner_id)))
-	return reservation.get("coordinator_id", 0) == owner.get_instance_id() and owner.reservation_current(int(reservation.reservation_id), int(reservation.assignment_id), int(reservation.owner_id))
 
-## Internal read-only lease views. All writes go through the area transaction API.
-func reservation_value(id: int) -> Dictionary:
-	return _reservations.get(id, {})
 
-func reservation_values() -> Array:
-	return _reservations.values()
+## Storage/transport primitives below are called only by squad coordinators.
+## Unbound actors use the same intel-only router without a tactical binding.
+func store_noise(context, position: Vector3) -> void:
+	if not _reservation_member_valid(context): return
+	_noise_reports[context.actor.get_instance_id()] = {"id": allocate_coordination_id(),
+		"target_id": context.cooperation_target_id(), "observer_id": context.actor.get_instance_id(),
+		"position": position, "observer_position": context.actor.global_position,
+		"captured_at": elapsed, "valid_until": elapsed + 5.0, "source": &"noise", "direction": Vector3.ZERO, "velocity": Vector3.ZERO}
 
-func has_reservation(id: int) -> bool:
-	return _reservations.has(id)
+func planning_observation(context) -> Dictionary:
+	var result: Dictionary = {}
+	var receiver: int = context.actor.get_instance_id()
+	for report: Dictionary in _reports.values() + _noise_reports.values():
+		if report.target_id != context.cooperation_target_id() or not can_share_intel(int(report.observer_id), receiver): continue
+		if result.is_empty() or report.captured_at > result.captured_at: result = report
+	return result.duplicate(true)
 
-func store_tactical_reservation(owner, value: Dictionary) -> void:
-	var context = _context(int(value.owner_id))
-	if context == null or coordinator_for(context) != owner: return
-	var entry := value.duplicate(true)
-	entry.coordinator_id = owner.get_instance_id()
-	_reservations[int(entry.reservation_id)] = entry
+func read_noise(context) -> Dictionary:
+	var result: Dictionary = {}
+	var receiver: int = context.actor.get_instance_id()
+	for report: Dictionary in _noise_reports.values():
+		if report.observer_id == receiver or report.valid_until <= elapsed or report.target_id != context.cooperation_target_id(): continue
+		if not can_share_intel(int(report.observer_id), receiver): continue
+		if result.is_empty() or report.captured_at > result.captured_at: result = report
+	return result.duplicate(true)
 
-func release_tactical_reservation(owner, id: int) -> void:
-	var entry: Dictionary = _reservations.get(id, {})
-	if not entry.is_empty() and entry.get("coordinator_id", 0) == owner.get_instance_id(): _reservations.erase(id)
+func release_squad_reservations(owner, member_id: int = 0) -> void:
+	var key: int = owner.get_instance_id()
+	if member_id == 0: _squad_reservations.erase(key)
+	elif _squad_reservations.has(key): _squad_reservations[key].erase(member_id)
 
-func attach_recommendation(context, reservation_id: int, recommendation_id: int, expires_at: float) -> Dictionary:
-	var entry: Dictionary = _reservations.get(reservation_id, {})
-	if entry.is_empty() or entry.owner_id != context.actor.get_instance_id() or not _reservation_valid(entry): return {}
-	entry.recommendation_id = recommendation_id
-	entry.expires_at = minf(entry.expires_at, expires_at)
-	return entry.duplicate(true)
+func _squad_obstacles(context) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var id: int = context.actor.get_instance_id()
+	for table in _squad_reservations.values():
+		for other in table:
+			if other == id or not can_share_space(id, other): continue
+			var entry: Dictionary = table[other]
+			if entry.expires_at > elapsed: result.append(entry.duplicate(true))
+	return result
 
-func prepare_assignment(context, identity: Dictionary, offer_key: String) -> Dictionary:
-	return coordinator_for(context).prepare_assignment(context, identity, offer_key)
-
-func commit_assignment(context, identity: Dictionary, reservation_token: Dictionary) -> bool:
-	return coordinator_for(context).commit_assignment(context, identity, reservation_token)
-
-func rollback_assignment(context, identity: Dictionary, reservation_token: Dictionary) -> void:
-	coordinator_for(context).rollback_assignment(context, identity, reservation_token)
-
-func report_assignment(context, report: Dictionary) -> bool:
-	return coordinator_for(context).report_assignment(context, report)
-
-func coordination_checked_points(context, target_id: int = 0) -> Array[Dictionary]:
-	return coordinator_for(context).coordination_checked_points(context, target_id)
-
-func _coordination_requests(ids: Array, source: Dictionary) -> Array:
-	return _legacy_coordinator._coordination_requests(ids, source)
-
-func publish_personal_baseline(context, summary: Dictionary) -> void:
-	coordinator_for(context).publish_personal_baseline(context, summary)
-
-func _coordination_snapshot(team_id: int, source: Dictionary, ids: Array) -> Dictionary:
-	return _legacy_coordinator._coordination_snapshot(team_id, source, ids)
-
-func _coordination_find_source(team_id: int, ids: Array) -> Dictionary:
-	return _legacy_coordinator._coordination_find_source(team_id, ids)
-
-func _drop_coordination_plan(team_id: int, _reason: StringName) -> void:
-	_legacy_coordinator._drop_coordination_plan(team_id, _reason)
-
-func recommendation(context) -> Dictionary:
-	return coordinator_for(context).recommendation(context)
-
-func recommendation_available(context, identity: Dictionary, offer_key: String) -> bool:
-	return coordinator_for(context).recommendation_available(context, identity, offer_key)
-
-func prepare_recommendation(context, advice: Dictionary, key: String, offer: Dictionary, duration: float) -> Dictionary:
-	return coordinator_for(context).prepare_recommendation(context, advice, key, offer, duration)
-
-func accept_recommendation(context, advice: Dictionary, token: Dictionary) -> bool:
-	return coordinator_for(context).accept_recommendation(context, advice, token)
+func commit_squad_reservations(owner, table: Dictionary) -> bool:
+	var prepared := {}
+	for id in table:
+		var context = _context(id)
+		if not _reservation_member_valid(context) or coordinator_for(context) != owner: return false
+		var task: Dictionary = table[id]
+		var entry := _reservation_footprint(context, task.position)
+		entry.merge({"owner_id": id, "position_set_key": str(task.position), "path_summary": {}, "expires_at": task.expires_at})
+		for other in prepared.values():
+			if _reservation_geometry_conflict(entry, other): return false
+		for reserved in _squad_obstacles(context):
+			if not table.has(reserved.owner_id) and _reservation_geometry_conflict(entry, reserved): return false
+		for reserved in _reservations.values():
+			if not table.has(reserved.owner_id) and _reservation_valid(reserved) and can_share_space(id, reserved.owner_id) and _reservation_geometry_conflict(entry, reserved): return false
+		for other_id in _members:
+			if table.has(other_id) or not can_share_space(id, other_id): continue
+			var other = _context(other_id)
+			if _reservation_member_valid(other) and _reservation_geometry_conflict(entry, _reservation_footprint(other, other.actor.global_position)): return false
+		prepared[id] = entry
+	_squad_reservations[owner.get_instance_id()] = prepared
+	revision += 1
+	return true

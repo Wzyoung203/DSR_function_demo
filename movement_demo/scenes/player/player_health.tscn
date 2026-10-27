@@ -2,9 +2,6 @@
 
 [ext_resource type="Script" path="res://scripts/player/player_health.gd" id="1"]
 [ext_resource type="Script" path="res://scripts/debug/noise_debug.gd" id="2_noise"]
-[ext_resource type="Script" path="res://scripts/player/player_medkit.gd" id="3_medkit"]
-[ext_resource type="Script" path="res://scripts/ui/medkit_indicator.gd" id="4_medkit_indicator"]
-[ext_resource type="Resource" path="res://resources/player/default_medkit.tres" id="5_medkit_settings"]
 
 [sub_resource type="StyleBoxFlat" id="StatusPanel"]
 content_margin_left = 12.0
@@ -42,15 +39,6 @@ corner_radius_bottom_right = 3
 process_mode = 3
 layer = 10
 script = ExtResource("1")
-
-[node name="Medkit" type="Node" parent="."]
-script = ExtResource("3_medkit")
-settings = ExtResource("5_medkit_settings")
-
-[node name="MedkitIndicator" type="Control" parent="."]
-visible = false
-mouse_filter = 2
-script = ExtResource("4_medkit_indicator")
 
 [node name="NoiseRanges" type="Node3D" parent="."]
 script = ExtResource("2_noise")
@@ -139,8 +127,7 @@ text = "测试受伤 -25"
 [node name="NoiseRanges" type="CheckBox" parent="Debug/Controls"]
 layout_mode = 2
 focus_mode = 0
-button_pressed = true
-tooltip_text = "实际发声时短暂显示：玩家蓝色、敌人橙色。外圈为无遮挡半径，内虚线圈为隔墙半径；不代表按墙裁切的精确形状。"
+tooltip_text = "默认关闭，仅影响声音范围显示。手动开启后，玩家蓝色、敌人橙色；不改变实际声音和 AI 听觉。"
 text = "声音范围"
 
 [node name="DeathScreen" type="ColorRect" parent="."]

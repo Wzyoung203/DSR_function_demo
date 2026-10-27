@@ -6,13 +6,13 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
-	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
+	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").unbound_scene()
 	root.add_child(scene)
 	current_scene = scene
 	var player = scene.get_node("Player")
 	player.set_physics_process(false)
 	var combat = player.get_node("Combat")
-	var slots = player.get_node_or_null("WeaponSlots")
+	var slots = player.get_node_or_null("Equipment")
 	_check("玩家挂载双武器槽", slots != null)
 	if slots == null:
 		_finish()
@@ -33,22 +33,22 @@ func _run() -> void:
 	for ammo_type in slots.reserve_ammo.keys():
 		slots.reserve_ammo[ammo_type] = 0
 	slots.refill_all_ammo()
-	_check("弹药奖励恢复步枪备弹", slots.reserve_ammo[WeaponData.AmmoType.RIFLE] == slots.starting_rifle_ammo)
-	_check("弹药奖励恢复手枪备弹", slots.reserve_ammo[WeaponData.AmmoType.PISTOL] == slots.starting_pistol_ammo)
-	_check("弹药奖励恢复冲锋枪备弹", slots.reserve_ammo[WeaponData.AmmoType.SMG] == slots.starting_smg_ammo)
-	_check("弹药奖励恢复霰弹备弹", slots.reserve_ammo[WeaponData.AmmoType.SHOTGUN] == slots.starting_shotgun_ammo)
+	_check("弹药奖励恢复步枪备弹", slots.reserve_ammo[&"rifle"] == slots.starting_rifle_ammo)
+	_check("弹药奖励恢复手枪备弹", slots.reserve_ammo[&"pistol"] == slots.starting_pistol_ammo)
+	_check("弹药奖励恢复冲锋枪备弹", slots.reserve_ammo[&"smg"] == slots.starting_smg_ammo)
+	_check("弹药奖励恢复霰弹备弹", slots.reserve_ammo[&"shotgun"] == slots.starting_shotgun_ammo)
 	var expected_reserve := {
-		WeaponData.AmmoType.RIFLE: slots.starting_rifle_ammo,
-		WeaponData.AmmoType.PISTOL: slots.starting_pistol_ammo,
-		WeaponData.AmmoType.SMG: slots.starting_smg_ammo,
-		WeaponData.AmmoType.SHOTGUN: slots.starting_shotgun_ammo,
+		&"rifle": slots.starting_rifle_ammo,
+		&"pistol": slots.starting_pistol_ammo,
+		&"smg": slots.starting_smg_ammo,
+		&"shotgun": slots.starting_shotgun_ammo,
 	}
 	for slot in range(2):
 		var data = slots._weapon_at(slot)
 		if data != null:
 			var state = slots._ammo_states[slot]
 			_check("弹药奖励补满槽%d并取消换弹" % slot, state.magazine_rounds == data.magazine_capacity and not state.is_reloading)
-			_check("弹药奖励同步已初始化槽%d备弹" % slot, state.reserve_count() == expected_reserve[data.ammo_type])
+			_check("弹药奖励同步已初始化槽%d备弹" % slot, state.reserve_count() == expected_reserve[data.get_ammo_definition().ammo_id])
 	combat.accuracy = 0.05
 	combat.accuracy_recovery_timer = 0.6
 	combat.shot_cooldown = 0.7
@@ -85,11 +85,14 @@ func _run() -> void:
 	var secondary = load("res://resources/weapons/test_sidearm.tres").duplicate()
 	primary.min_spread_angle_degrees = 0.0
 	primary.max_spread_angle_degrees = 0.0
+	primary.headshot_chance = 0.0
 	secondary.min_spread_angle_degrees = 0.0
 	secondary.max_spread_angle_degrees = 0.0
+	secondary.headshot_chance = 0.0
 	slots.primary_weapon = primary
 	slots.secondary_weapon = secondary
-	_key(KEY_1)
+	# 当前已经选中主槽；替换资源后强制重绑，才能用无散布的测试资源开火。
+	slots._equip_slot(0)
 	player.global_position = Vector3(0, 0, -1)
 	player.rotation = Vector3.ZERO
 	var target = scene.get_node("CombatTest/TargetB")
@@ -119,13 +122,13 @@ func _run() -> void:
 	# 新实例验证初始配置，不修改运行中的用户资源。
 	var packed = load("res://scenes/main.tscn")
 	var other = packed.instantiate()
-	var other_slots = other.get_node("Player/WeaponSlots")
+	var other_slots = other.get_node("Player/Equipment")
 	other_slots.primary_weapon = null
 	root.add_child(other)
 	_check("初始主槽为空时自动选副槽", other_slots.active_slot == 1 and other.get_node("Player/Combat").weapon == other_slots.secondary_weapon)
 	other.free()
 	other = packed.instantiate()
-	other_slots = other.get_node("Player/WeaponSlots")
+	other_slots = other.get_node("Player/Equipment")
 	other_slots.primary_weapon = null
 	other_slots.secondary_weapon = null
 	root.add_child(other)
@@ -141,7 +144,7 @@ func _run() -> void:
 	health.get_node("DeathScreen/Center/Panel/Content/Restart").pressed.emit()
 	for frame in range(10):
 		await process_frame
-	slots = current_scene.get_node("Player/WeaponSlots")
+	slots = current_scene.get_node("Player/Equipment")
 	combat = current_scene.get_node("Player/Combat")
 	_check("死亡重开恢复检查器初始槽位和武器状态", not paused and slots.active_slot == 0 and combat.weapon == slots.primary_weapon and combat.shot_cooldown == 0.0)
 	_check("双武器重开仍保留对话选择", game_state.help_choice == "accepted")

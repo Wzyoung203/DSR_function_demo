@@ -6,6 +6,8 @@
 
 ## 编辑场景
 
+独立的五张地图位于 `scenes/world/levels/lvl_1.tscn` 至 `lvl_5.tscn`，均含战斗区域、独立导航与空 Squad，未替换当前竞技场。对应图纸、尺寸与专用重烘命令见 [关卡地图](LEVEL_MAPS.md)。
+
 - 敌人身体、生命与武器在 `Enemy`；兵种资源在 `Enemy/UnitType`，训练资源和战术勾选在 `Enemy/Training`。
 - `Enemy/AI` 协调运行，`Perception` 和 `Cover` 子节点提供感知与空间查询。动作按资源装配，无需逐个添加动作节点。
 - 掩体位于 `NavigationRegion3D/Environment`，可以实例化 `scenes/world/cover.tscn` 添加。改动墙体、地板或掩体布局后，应重新烘焙导航。
@@ -32,6 +34,6 @@
 
 ## 试玩
 
-按 F5 进入竞技场，观察交战、换弹、绕掩体、失视搜索及重新目击。游戏内 Debug 总开关可显示攻击候选、声音范围和敌人状态；需要时启用无敌。
+默认 F5 从第1关开始。打开 `scenes/main.tscn` 后按 F6 进入旧竞技场功能演示，观察交战、换弹、绕掩体、失视搜索及重新目击。游戏内 Debug 总开关可显示攻击候选、声音范围和敌人状态；需要时启用无敌。
 
 当前验证入口见 [敌人测试](../enemy-tests.md)。视野边缘切换和整体手感仍按真实复现处理。

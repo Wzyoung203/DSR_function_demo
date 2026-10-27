@@ -29,7 +29,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	# Retain the real player subtree, including ammo/slots/HUD, in a controlled physical room.
-	var original: Node = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
+	var original: Node = preload("res://tests/enemy/enemy_fire_fixture.gd").unbound_scene()
 	player = original.get_node("Player")
 	original.remove_child(player)
 	original.free()
@@ -48,7 +48,7 @@ func _run() -> void:
 	scene.add_child(player)
 	player.set_physics_process(false)
 	combat = player.get_node("Combat")
-	slots = player.get_node("WeaponSlots")
+	slots = player.get_node("Equipment")
 	slots.primary_weapon = slots.primary_weapon.duplicate()
 	slots.secondary_weapon = slots.secondary_weapon.duplicate()
 	for weapon in [slots.primary_weapon, slots.secondary_weapon]:
@@ -148,31 +148,31 @@ func _run() -> void:
 	gun_blocker.queue_free()
 	player.request_crouch(true)
 	await _step(15)
-	# The bonus is a view of base accuracy, shared by both existing aim modes.
+	# Crouching never writes or completes base convergence in either mode.
 	for mode in [0, 1]:
 		combat.aim_mode = mode
 		combat.accuracy = 0.5
 		combat.crouch_bonus_blocked_until_recovery = false
-		_check("mode %d adds 0.25 without writing base" % mode, is_equal_approx(combat.get_effective_accuracy(), 0.75) and combat.accuracy == 0.5)
+		_check("mode %d preserves base accuracy while crouching" % mode, is_equal_approx(combat.get_effective_accuracy(), 0.5) and combat.accuracy == 0.5)
 		combat.accuracy = 0.9
-		_check("mode %d caps effective accuracy at one" % mode, combat.get_effective_accuracy() == 1.0)
+		_check("mode %d cannot complete convergence by crouching" % mode, combat.get_effective_accuracy() == 0.9)
 	combat.accuracy = 0.5
-	combat.crouch_accuracy_bonus = 0.0
-	_check("zero bonus disables it", combat.get_effective_accuracy() == 0.5)
-	combat.crouch_accuracy_bonus = 0.25
+	combat.crouch_spread_reduction = 0.0
+	_check("zero reduction disables it", combat.get_spread_stability() == 0.5)
+	combat.crouch_spread_reduction = 0.25
 	combat.ammo.magazine_rounds = 1
 	_check("crouch allows existing reload", combat.request_reload())
-	_check("reload forced zero overrides crouch bonus", combat.get_effective_accuracy() == 0.0)
+	_check("reload forced zero overrides crouch spread reduction", combat.get_effective_accuracy() == 0.0 and combat.get_spread_stability() == 0.0)
 	combat.end_frame(combat.weapon.reload_seconds + 1.0, false)
-	_check("completion frame remains zero", not combat.ammo.is_reloading and combat.get_effective_accuracy() == 0.0)
+	_check("completion frame remains zero", not combat.ammo.is_reloading and combat.get_effective_accuracy() == 0.0 and combat.get_spread_stability() == 0.0)
 	combat.end_frame(0.01, false)
-	_check("post-reload recovery wait remains zero", combat.get_effective_accuracy() == 0.0)
+	_check("post-reload recovery wait remains zero", combat.get_effective_accuracy() == 0.0 and combat.get_spread_stability() == 0.0)
 	combat.end_frame(5.0, false)
-	_check("bonus returns after original recovery wait", combat.get_effective_accuracy() >= 0.25)
-	combat.apply_melee_disruption()
-	_check("melee disruption overrides crouch bonus", combat.get_effective_accuracy() == 0.0)
+	_check("spread reduction returns after original recovery wait", combat.get_spread_stability() > combat.get_effective_accuracy())
+	combat.apply_weapon_hit(WeaponData.new().get_attack_effects(true))
+	_check("melee disruption overrides crouch spread reduction", combat.get_effective_accuracy() == 0.0 and combat.get_spread_stability() == 0.0)
 	slots.select_slot(1)
-	_check("switching weapon cannot bypass melee zero", combat.get_effective_accuracy() == 0.0)
+	_check("switching weapon cannot bypass melee zero", combat.get_effective_accuracy() == 0.0 and combat.get_spread_stability() == 0.0)
 	await _step(3)
 	combat.end_frame(5.0, false)
 	combat.cancel_reload()
@@ -232,11 +232,11 @@ func _run() -> void:
 	saved.free()
 	var packed_combat := PackedScene.new()
 	var settings_node = combat.get_script().new()
-	settings_node.crouch_accuracy_bonus = 0.4
+	settings_node.set("crouch_accuracy_bonus", 0.4)
 	packed_combat.pack(settings_node)
 	ResourceSaver.save(packed_combat, "user://half-cover-accuracy-test.tscn")
 	var reloaded_combat = load("user://half-cover-accuracy-test.tscn").instantiate()
-	_check("player-only accuracy bonus is exported and reloads", is_equal_approx(reloaded_combat.crouch_accuracy_bonus, 0.4))
+	_check("legacy crouch ratio migrates to spread reduction and reloads", is_equal_approx(reloaded_combat.crouch_spread_reduction, 0.4))
 	reloaded_combat.free()
 	settings_node.free()
 	DirAccess.remove_absolute("user://half-cover-accuracy-test.tscn")
@@ -288,7 +288,7 @@ func _run() -> void:
 	await _step(5)
 	_check("second vault starts", player.request_vault(Vector3.FORWARD))
 	await _step(24)
-	player.receive_melee_hit(1.0, player.global_position + Vector3.RIGHT, 0.1, 0.1)
+	player.receive_melee_hit(1.0, player.global_position + Vector3.RIGHT, 0.1, 0.1, Vector3.FORWARD, {"melee": true, "hit_accuracy_loss": 1.0})
 	_check("interrupted airborne vault remains occupied", player.is_vaulting() and not combat.request_melee())
 	await _step(180)
 	_check("interrupted vault settles off wall without collider bypass", not player.is_vaulting() and player.is_on_floor() and player.global_position.y < 0.2)
@@ -328,8 +328,43 @@ func _run() -> void:
 	_check("new vault click creates no pending shot", not combat.shot_requested and not combat.fire_held)
 	await _step(65)
 	Input.action_release("aim")
+	await _check_edge_crossings()
 	print("Player half cover: %d/%d passed" % [checks - failed, checks])
 	quit(0 if failed == 0 else 1)
+
+func _check_edge_crossings() -> void:
+	var saved: Transform3D = wall.transform
+	var collision := wall.get_node("CollisionShape3D") as CollisionShape3D
+	var half: Vector3 = collision.shape.size * 0.5
+	for rotated in [false, true]:
+		wall.transform = saved
+		if rotated:
+			wall.rotation.y = PI * 0.37
+			wall.scale = Vector3(0.75, 1.0, 0.75)
+		for fraction in [-1.0, -0.9, 0.9, 1.0]:
+			var side := -1.0 if fraction < 0.0 else 1.0
+			var direction: Vector3 = -collision.global_basis.z.normalized() * side
+			player.global_position = collision.to_global(Vector3(half.x * fraction, -half.y, side * (half.z + 0.6 / collision.global_basis.z.length())))
+			player.global_rotation.y = atan2(-direction.x, -direction.z)
+			player.velocity = Vector3.ZERO
+			await _step(5)
+			# Exercise the same input chain as the Space key, including facing fallback.
+			var vault_input := InputEventAction.new()
+			vault_input.action = "vault"
+			vault_input.pressed = true
+			Input.parse_input_event(vault_input)
+			Input.flush_buffered_events()
+			await _step(1)
+			_check("edge Space input starts actual vault rotated=%s fraction=%s" % [rotated, fraction], player.is_vaulting())
+			vault_input = InputEventAction.new()
+			vault_input.action = "vault"
+			vault_input.pressed = false
+			Input.parse_input_event(vault_input)
+			Input.flush_buffered_events()
+			await _step(90)
+			var local_feet := collision.to_local(player.global_position)
+			_check("edge vault lands across the wall rotated=%s fraction=%s" % [rotated, fraction], not player.is_vaulting() and player.is_on_floor() and local_feet.z * side < -half.z and absf(player.global_position.y) < 0.02)
+	wall.transform = saved
 
 func _send_c_key(pressed: bool, echo: bool = false) -> void:
 	var key := InputEventKey.new()

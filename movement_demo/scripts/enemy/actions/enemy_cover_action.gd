@@ -47,20 +47,6 @@ func transfer_candidates() -> Array:
 			destinations.append(current)
 	return destinations
 
-func assignment_escape(candidate: Dictionary, visible: bool) -> bool:
-	# Ordinary hide is the defensive choice; peek/burst/advance remain personal
-	# tactical choices even when they carry the same cover body or urgent label.
-	if candidate.get("mode", &"") != &"": return false
-	return _defensive_cover_escape(candidate, visible)
-
-func _defensive_cover_escape(candidate: Dictionary, visible: bool) -> bool:
-	if candidate.get("id") != action_id or candidate.get("plan", &"") != &"" or not is_enabled(): return false
-	if context.recent_damage_pressure <= 0.0 and context.nearby_shot_pressure <= 0.0: return false
-	if not actor.can_move() or actor.move_speed <= 0.0: return false
-	var destination: Dictionary = candidate.get("destination", {})
-	if not destination.get("hide") is Vector3 or not destination.hide.is_finite() or not is_instance_valid(destination.get("body")): return false
-	return validate(candidate, visible)
-
 func collect_candidates(visible: bool) -> Array[Dictionary]:
 	var options: Array[Dictionary] = []
 	var threat: Vector3 = context._known_reload_threat()
@@ -69,9 +55,11 @@ func collect_candidates(visible: bool) -> Array[Dictionary]:
 	var defensive_melee: bool = context.combat_type == context.CombatType.MELEE
 	if defensive_melee and context.melee.can_request(visible): return options
 	var under_pressure: bool = context.recent_damage_pressure > 0.0 or context.nearby_shot_pressure > 0.0
+	var investigate_loss := _yield_to_investigation(visible)
 	var horizon: float = context.utility_horizon_seconds
 	var information: float = 0.0 if visible else horizon
 	for destination in transfer_candidates():
+		if investigate_loss: continue
 		# 近战的基础躲藏用于缓解新压力；低血量本身不能使其永久躲藏。
 		# 压力途中消退仍完成当前转移，到位后保留探出／搜索／接敌的共同选择。
 		var continuing: bool = _running and transfer.phase == transfer.Phase.RUN_TO_COVER and destination.body == transfer.active_cover_body and destination.hide.is_equal_approx(transfer.hide_position)
@@ -148,6 +136,7 @@ func _assess_peek(threat: Vector3, information: float, visible: bool, options: A
 		options.append(candidate)
 
 func validate(candidate: Dictionary, visible: bool) -> bool:
+	if _yield_to_investigation(visible) and candidate.get("mode", &"") != &"peek": return false
 	return super.validate(candidate, visible) and (candidate.get("mode") == &"peek" or _valid_cover(candidate.destination))
 
 func begin(candidate: Dictionary, visible: bool) -> bool:
@@ -164,10 +153,15 @@ func begin(candidate: Dictionary, visible: bool) -> bool:
 	return true
 
 func valid(_visible: bool) -> bool:
+	if transfer.phase == transfer.Phase.RUN_TO_COVER and _yield_to_investigation(_visible): return false
 	return _running and is_enabled() and transfer.is_active() and (not low_cycle.active() or actor.can_use_firearms())
 
 func tick(delta: float, visible: bool) -> Dictionary:
 	_transfer_reconsider = false
+	if transfer.phase == transfer.Phase.RUN_TO_COVER and _yield_to_investigation(visible):
+		_running = false
+		context.invalidate_utility()
+		return motion(Vector3.ZERO)
 	if low_cycle.active() and low_cycle.phase != low_cycle.Phase.APPROACH:
 		low_cycle.tick(delta, true, visible, transfer.watch_seconds)
 		_running = low_cycle.active()
@@ -195,7 +189,16 @@ func reset() -> void:
 	low_cycle.reset()
 	_transfer_reconsider = false
 
+func _yield_to_investigation(visible: bool) -> bool:
+	# Losing the target changes the purpose of movement at every team level.
+	# Real incoming danger still permits personal cover; old exposure scores do not.
+	if visible or actor.is_vaulting() or actor.melee_active: return false
+	if context.recent_damage_pressure > 0.0 or context.nearby_shot_pressure > 0.0: return false
+	if not context.has_combat_contact() and context.cover_inspection_evidence().is_empty(): return false
+	return context.cooperation == null or not context._coordinator().has_visual_contact(context)
+
 func can_interrupt(next: Dictionary, _visible: bool) -> bool:
+	if _yield_to_investigation(_visible): return true
 	# 有效转移执行到底，避免邻近样本轮换不断清空卡住计时和绕行次数。
 	var unavailable: bool = low_cycle.active() and (not actor.can_use_firearms() or actor.ammo.is_reloading or actor.ammo.magazine_rounds <= 0)
 	return next.get("urgent", false) or _transfer_reconsider or unavailable or (not low_cycle.committed() and transfer.phase != transfer.Phase.RUN_TO_COVER)
@@ -219,3 +222,68 @@ func route_tick(delta: float, _visible: bool) -> Dictionary:
 	transfer.timer = maxf(0.0, transfer.timer - delta)
 	if transfer.timer <= 0.0: _running = false
 	return motion(Vector3.ZERO, route_multiplier())
+
+var _command_cover_time := 0.0
+var _command_cover_shots := 0
+var _command_burst_count := 1
+
+func command_roles() -> Array[StringName]:
+	return [&"shelter", &"cover_peek"]
+
+func command_site_offer(query: Dictionary, site: Dictionary) -> Dictionary:
+	if not site.has("defense_post"): return {}
+	var offer := super.command_site_offer(query, site)
+	if offer.is_empty() or offer.get("retry_detour", false) or offer.get("route_pending", false): return offer
+	var speed: float = _setting(&"peek_speed_multiplier", 0.5) if site.role == &"cover_peek" else _setting(&"run_speed_multiplier", 2.0)
+	var seconds := command_route_seconds(offer, speed)
+	offer.speed_multiplier = speed
+	offer.travel_seconds = seconds
+	offer.estimate = seconds + (1.0 if site.get("defense_proactive", false) else 0.0) + (0.0 if site.defense_post.peek.is_finite() else 2.0)
+	offer.tactical = {"protected": true, "sustainable_fire": site.role == &"cover_peek" and query.body.rounds > 0,
+		"travel": seconds, "pressure": query.body.pressure}
+	offer.plan_key = [action_id, site.defense_id, site.role, offer.position]
+	return offer
+
+func validate_command_offer(query: Dictionary, offer: Dictionary) -> Dictionary:
+	var result := super.validate_command_offer(query, offer)
+	if result.valid and offer.role in [&"shelter", &"cover_peek"]:
+		result.valid = offer.has("defense_post") and preload("res://scripts/enemy/services/squad_defense.gd").protected(context, offer.defense_post, offer.look_position)
+	return result
+
+func begin_command(task: Dictionary) -> bool:
+	_command_cover_time = 0.0
+	_command_cover_shots = actor.shot_count
+	_command_burst_count = maxi(1, context.fire.burst_shots_remaining())
+	return super.begin_command(task)
+
+func command_work(delta: float, visible: bool, arrived: bool) -> Dictionary:
+	var shelter = command.role == &"shelter"
+	var post: Dictionary = command.defense_post
+	var output = {"crouch": shelter and arrived and post.crouch}
+	if not is_instance_valid(instance_from_id(post.cover_id)):
+		context.report_command(command, &"blocked", {"reason": &"cover_removed"})
+		return output
+	if not arrived:
+		if shelter and command.get("moving_fire", false) and visible and actor.can_use_firearms():
+			output.fire = {"owner": action_id, "mode": &"visible", "support_intent": true, "pressure_reason": &"retreat"}
+		context.report_command(command, &"executing")
+		return output
+	if shelter:
+		if not preload("res://scripts/enemy/services/squad_defense.gd").protected(context, post, command.look_position):
+			context.report_command(command, &"blocked", {"reason": &"cover_exposed"})
+			return output
+		if not post.crouch or actor.is_crouching(): _command_cover_time += delta
+		if actor.can_use_firearms() and actor.ammo.magazine_rounds == 0 and not actor.ammo.is_reloading: actor.request_reload()
+		var calm: bool = context.recent_damage_pressure + context.nearby_shot_pressure <= maxf(0.01, float(command.stress_tolerance) * 0.5)
+		var complete = calm and _command_cover_time >= float(_setting(&"low_cover_hide_seconds", 0.6)) and not actor.ammo.is_reloading
+		context.report_command(command, &"complete" if complete else &"executing", {"reason": &"protected", "progress": 1.0 if complete else 0.5})
+	else:
+		_command_cover_time += delta
+		if visible and actor.can_use_firearms(): output.fire = {"owner": action_id, "mode": &"visible"}
+		var budget: float = float(_setting(&"watch_seconds", 2.0))
+		if visible and actor.can_use_firearms():
+			budget += context.fire.fire_reaction_seconds + context.fire.shot_wait_seconds() + actor.weapon.stabilize_seconds
+			budget += context.fire.shot_interval_seconds() * _command_burst_count
+		var complete = actor.shot_count - _command_cover_shots >= _command_burst_count or _command_cover_time >= budget or actor.ammo.is_reloading or actor.ammo.magazine_rounds == 0
+		context.report_command(command, &"complete" if complete else &"executing", {"reason": &"cover_fire", "progress": 1.0 if complete else 0.5})
+	return output

@@ -16,6 +16,8 @@ signal vault_landed
 @export_range(0.7, 1.75, 0.01) var standing_muzzle_height: float = 1.30
 @export_range(0.1, 1.5, 0.01) var crouching_muzzle_height: float = 0.72
 @export_range(0.3, 2.0, 0.05) var vault_duration: float = 0.8
+@export_range(0.1, 2.0, 0.05) var vault_push_distance: float = 1.0
+@export_range(0.1, 1.0, 0.05) var vault_push_seconds: float = 0.25
 @export_range(0.5, 2.5, 0.05) var cover_interaction_distance: float = 1.5
 var manual_crouch: bool = false
 var crouch_amount: float = 0.0
@@ -29,6 +31,10 @@ var _vault_elapsed: float = 0.0
 var _vault_falling: bool = false
 var _vault_progress: float = 0.0
 var _vault_region: WeakRef
+var _vault_pushed: Dictionary = {}
+var _vault_landing_target: Vector3 = Vector3.INF
+var _vault_landing_best: float = INF
+var _vault_landing_stalled: float = 0.0
 var _camera_ground_height: float = 0.0
 
 @export_group("移动")
@@ -96,8 +102,8 @@ var is_in_dialogue: bool = false
 var _melee_push_velocity := Vector3.ZERO
 var _melee_push_remaining := 0.0
 var _melee_push_duration := 0.0
-var _melee_slow_multiplier := 1.0
-var _melee_slow_remaining := 0.0
+var _hit_slow_multiplier := 1.0
+var _hit_slow_remaining := 0.0
 
 @onready var visual: Node3D = $"."
 @onready var combat = get_node_or_null("Combat")
@@ -136,8 +142,8 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if is_dead() or get_tree().paused:
 		return
-	_melee_slow_remaining = maxf(0.0, _melee_slow_remaining - maxf(0.0, delta))
-	if is_zero_approx(_melee_slow_remaining): _melee_slow_remaining = 0.0
+	_hit_slow_remaining = maxf(0.0, _hit_slow_remaining - maxf(0.0, delta))
+	if is_zero_approx(_hit_slow_remaining): _hit_slow_remaining = 0.0
 	if combat != null:
 		combat.begin_frame(delta, Input.is_action_pressed("aim"))
 	if is_vaulting():
@@ -189,7 +195,7 @@ func _physics_process(delta: float) -> void:
 				target_speed = move_speed * get_posture_move_multiplier()
 				if is_sprinting:
 					target_speed *= sprint_speed_multiplier
-	var hit_speed_multiplier := get_melee_movement_multiplier()
+	var hit_speed_multiplier := get_hit_movement_multiplier()
 	target_speed *= hit_speed_multiplier
 	if facing_npc_this_frame or is_in_dialogue:
 		# 对话期间清掉移动惯性。
@@ -213,8 +219,6 @@ func _physics_process(delta: float) -> void:
 	velocity.x = forward.x * current_speed
 	velocity.z = forward.z * current_speed
 
-	_update_stamina(delta)
-
 	if not is_on_floor():
 		velocity += get_gravity() * delta
 	else:
@@ -224,6 +228,12 @@ func _physics_process(delta: float) -> void:
 	var push := _advance_melee_push(delta)
 	velocity += push
 	move_and_slide()
+	if is_sprinting and _sprint_blocked_by_wall(own_horizontal):
+		is_sprinting = false
+		current_speed = 0.0
+		own_horizontal = Vector2.ZERO
+	# 碰撞后再结算体力；顶墙停住不能保留奔跑状态或继续扣费。
+	_update_stamina(delta)
 	if is_on_floor(): _camera_ground_height = global_position.y
 	_update_movement_noise(delta, before_move)
 	if combat != null:
@@ -234,11 +244,26 @@ func _physics_process(delta: float) -> void:
 		velocity.z = own_horizontal.y
 
 
+func _sprint_blocked_by_wall(own_horizontal: Vector2) -> bool:
+	if not is_on_wall(): return false
+	var allowed := own_horizontal
+	for index in get_slide_collision_count():
+		var collision := get_slide_collision(index)
+		for contact in collision.get_collision_count():
+			var normal := collision.get_normal(contact)
+			if absf(normal.dot(up_direction)) >= cos(floor_max_angle): continue
+			var horizontal_normal := Vector2(normal.x, normal.z).normalized()
+			allowed -= horizontal_normal * minf(0.0, allowed.dot(horizontal_normal))
+	# 允许有真实位移的沿墙滑动；侧向击退不能冒充被墙挡住的主动奔跑。
+	var actual := Vector2(get_real_velocity().x, get_real_velocity().z)
+	return allowed.length_squared() <= 0.0001 or actual.length_squared() <= 0.0001
+
+
 # 锁定和近战时朝向交给 Combat；移动方向独立于角色朝向。
 func _move_while_locked(delta: float, direction: Vector3, melee: bool = false) -> void:
 	is_sprinting = false
 	var speed: float = move_speed if melee else move_speed * combat.weapon.locked_move_multiplier
-	speed *= get_posture_move_multiplier() * get_melee_movement_multiplier()
+	speed *= get_posture_move_multiplier() * get_hit_movement_multiplier()
 	var desired: Vector3 = direction * speed
 	# 进入锁定时也限制惯性，不能带着奔跑速度横移。
 	var horizontal := Vector3(velocity.x, 0.0, velocity.z).limit_length(speed)
@@ -306,7 +331,7 @@ func set_dialogue_active(active: bool) -> void:
 	if active:
 		_begin_vault_fall()
 		_aim_cover.clear()
-		clear_melee_hit_effects()
+		clear_hit_effects()
 		if combat != null:
 			combat.cancel_melee()
 			combat.cancel_aim()
@@ -324,26 +349,36 @@ func face_npc(npc_position: Vector3) -> void:
 		is_facing_npc = true
 
 
-## 统一受伤入口，后续敌人命中玩家时调用；当前不使用攻击者位置。
+## 无攻击上下文的扣血入口，只结算生命；真实武器效果使用 receive_weapon_hit。
 func receive_hit(damage: float = 25.0, _attacker_position: Vector3 = Vector3.ZERO) -> void:
 	if health != null:
 		health.receive_hit(damage)
-		if health.is_dead: clear_melee_hit_effects()
+		if health.is_dead: clear_hit_effects()
+
+
+func receive_weapon_hit(damage: float, attacker_position: Vector3, effects: Dictionary) -> void:
+	if is_dead() or not is_finite(damage) or damage <= 0.0: return
+	receive_hit(damage, attacker_position)
+	if not is_dead() and combat != null: combat.apply_weapon_hit(effects)
+
+
+## 身体唯一的命中减速状态；损失已乘受方倍率。只限制自主速度，不影响击退和重力。
+func apply_hit_slowdown(loss: float, seconds: float) -> void:
+	if is_dead() or not is_finite(loss) or not is_finite(seconds) or loss <= 0.0 or seconds <= 0.0: return
+	_hit_slow_multiplier = 1.0 - clampf(loss, 0.0, 1.0)
+	_hit_slow_remaining = seconds
 
 
 ## 玩家自己的近战受击入口；与敌人受击实现分开，外力由原移动入口推进。
 func receive_melee_hit(damage: float, attacker_position: Vector3, distance: float,
 		duration: float, fallback_direction: Vector3 = Vector3.FORWARD,
-		slow_multiplier: float = 1.0, slow_seconds: float = 0.0) -> void:
+		effects: Dictionary = {}) -> void:
 	if is_dead() or is_in_dialogue or get_tree().paused: return
+	if not is_finite(damage) or damage < 0.0: return
 	receive_hit(damage, attacker_position)
-	if combat != null: combat.apply_melee_disruption()
 	if is_dead(): return
+	if combat != null: combat.apply_weapon_hit(effects)
 	_begin_vault_fall()
-	# 仅有效减速刷新计时；无减速的武器不会清除已有受击效果。
-	if is_finite(slow_multiplier) and is_finite(slow_seconds) and slow_multiplier < 1.0 and slow_seconds > 0.0:
-		_melee_slow_multiplier = clampf(slow_multiplier, 0.0, 1.0)
-		_melee_slow_remaining = slow_seconds
 	var direction := global_position - attacker_position
 	direction.y = 0.0
 	if direction.is_zero_approx(): direction = Vector3(fallback_direction.x, 0.0, fallback_direction.z)
@@ -367,14 +402,14 @@ func _clear_melee_push() -> void:
 	_melee_push_duration = 0.0
 
 
-func get_melee_movement_multiplier() -> float:
-	return _melee_slow_multiplier if _melee_slow_remaining > 0.0 else 1.0
+func get_hit_movement_multiplier() -> float:
+	return _hit_slow_multiplier if _hit_slow_remaining > 0.0 else 1.0
 
 
-func clear_melee_hit_effects() -> void:
+func clear_hit_effects() -> void:
 	_clear_melee_push()
-	_melee_slow_remaining = 0.0
-	_melee_slow_multiplier = 1.0
+	_hit_slow_remaining = 0.0
+	_hit_slow_multiplier = 1.0
 
 
 func is_dead() -> bool:
@@ -532,12 +567,16 @@ func _apply_body_posture() -> void:
 func request_vault(direction: Vector3) -> bool:
 	if is_dead() or is_in_dialogue or get_tree().paused or is_vaulting() or not is_on_floor(): return false
 	if combat != null and combat.is_melee_active(): return false
-	var plan: Dictionary = LowCoverGeometry.query_vault(self, direction, cover_interaction_distance, vault_duration)
+	var plan: Dictionary = LowCoverGeometry.query_vault(self, direction, cover_interaction_distance, vault_duration, true)
 	if not plan.get("valid", false): return false
 	_vault_plan = plan
 	_vault_elapsed = 0.0
 	_vault_progress = 0.0
 	_vault_falling = false
+	_vault_pushed.clear()
+	_vault_landing_target = Vector3.INF
+	_vault_landing_best = INF
+	_vault_landing_stalled = 0.0
 	_camera_ground_height = global_position.y
 	_aim_cover.clear()
 	is_sprinting = false
@@ -578,6 +617,7 @@ func _advance_vault(delta: float) -> void:
 	var motion := destination - global_position
 	velocity = motion / maxf(delta, 0.0001)
 	var collision := move_and_collide(motion, false, 0.001)
+	if collision != null: _push_vault_collision(collision)
 	if collision != null or _vault_progress >= 1.0:
 		_begin_vault_fall()
 		_advance_vault_fall(delta)
@@ -596,24 +636,61 @@ func _advance_vault_fall(delta: float) -> void:
 	var own := Vector3.ZERO
 	# 临时停在墙顶不算落地；沿最近合法端点走出后继续重力收尾。
 	if is_on_floor() and global_position.y > ground_height + 0.2:
-		var entry: Vector3 = _vault_plan.entry
-		var finish: Vector3 = _vault_plan.exit
-		var destination := entry if global_position.distance_squared_to(entry) < global_position.distance_squared_to(finish) else finish
-		own = destination - global_position
-		own.y = 0.0
-		own = own.normalized() * move_speed
+		own = _vault_landing_direction(delta)
 	velocity.x = own.x
 	velocity.z = own.z
 	velocity += get_gravity() * delta
 	velocity += _advance_melee_push(delta)
 	move_and_slide()
+	for index in get_slide_collision_count():
+		_push_vault_collision(get_slide_collision(index))
 	if is_on_floor() and global_position.y <= ground_height + 0.2:
 		_finish_vault()
+
+
+func _push_vault_collision(collision: KinematicCollision3D) -> void:
+	var heading: Vector3 = _vault_plan.exit - _vault_plan.entry
+	heading.y = 0.0
+	heading = heading.normalized()
+	var middle: Vector3 = (_vault_plan.entry + _vault_plan.exit) * 0.5
+	for index in collision.get_collision_count():
+		var other := collision.get_collider(index) as CharacterBody3D
+		if other == null or not other.has_method("receive_body_push"): continue
+		if _vault_pushed.has(other.get_instance_id()): continue
+		# 仅推开墙对面的真实接触者，不把入口身后的角色往墙上推。
+		if (other.global_position - middle).dot(heading) < 0.0: continue
+		if other.receive_body_push(heading, vault_push_distance, vault_push_seconds):
+			_vault_pushed[other.get_instance_id()] = true
+
+
+func _vault_landing_direction(delta: float) -> Vector3:
+	var entry: Vector3 = _vault_plan.entry
+	var finish: Vector3 = _vault_plan.exit
+	if not _vault_landing_target.is_finite():
+		_vault_landing_target = entry if global_position.distance_squared_to(entry) < global_position.distance_squared_to(finish) else finish
+	var direction := _vault_landing_target - global_position
+	direction.y = 0.0
+	if direction.length() < _vault_landing_best - 0.02:
+		_vault_landing_best = direction.length()
+		_vault_landing_stalled = 0.0
+	else:
+		_vault_landing_stalled += maxf(0.0, delta)
+	# 给接触推力留出执行时间；推不开时走另一合法端点，不能在墙顶解除占用。
+	if _vault_landing_stalled >= maxf(0.3, vault_push_seconds):
+		var other := finish if _vault_landing_target.is_equal_approx(entry) else entry
+		if CharacterGeometry.can_occupy(self, other, STANDING_HEIGHT, _body_radius()):
+			_vault_landing_target = other
+			_vault_landing_best = INF
+			_vault_landing_stalled = 0.0
+			direction = other - global_position
+			direction.y = 0.0
+	return direction.normalized() * move_speed
 
 
 func _finish_vault() -> void:
 	var was_vaulting := is_vaulting()
 	_vault_plan.clear()
+	_vault_pushed.clear()
 	_vault_elapsed = 0.0
 	_vault_falling = false
 	_vault_progress = 0.0
@@ -634,7 +711,8 @@ func _on_vault_region_reset(region: Node) -> void:
 
 func _on_posture_death() -> void:
 	_vault_plan.clear()
+	_vault_pushed.clear()
 	_posture_presentation_transition = &""
 	_vault_region = null
 	_aim_cover.clear()
-	clear_melee_hit_effects()
+	clear_hit_effects()

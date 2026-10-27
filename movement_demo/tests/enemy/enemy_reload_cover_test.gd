@@ -9,7 +9,7 @@ func _initialize() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
-	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").legacy_scene()
+	var scene = preload("res://tests/enemy/enemy_fire_fixture.gd").single_member_scene()
 	root.add_child(scene)
 	current_scene = scene
 	var actor = preload("res://tests/enemy/enemy_fire_fixture.gd").primary_enemy(scene)
@@ -26,13 +26,33 @@ func _run() -> void:
 	ai.training.profile.set_setting(&"perception", &"hearing_enabled", false)
 	actor.debug_shooting = false
 	player.health.debug_invincible = true
-	var wall = scene.get_node("Arena/NavigationRegion3D/Environment/LowCover")
-	var center: Vector3 = wall.global_position
-	center.y = 0.0
-	player.global_position = center + Vector3.FORWARD * 4.0
+	# 原LowCover节点已移除。使用当前竞技场已有的低墙CoverD，不改保存地图。
+	# 从碰撞盒取落脚基准与局部方向，短边选朝场内的一端，避免固定世界偏移越界。
+	var wall = scene.get_node_or_null("Arena/NavigationRegion3D/Environment/CoverD")
+	if wall == null or not wall.has_method("is_low_cover") or not wall.is_low_cover():
+		check(false, "当前竞技场的CoverD必须提供真实低掩体碰撞，配置改变时明确失败退出")
+		scene.queue_free()
+		await process_frame
+		quit(1)
+		return
+	var collision: CollisionShape3D = wall.get_node("CollisionShape3D")
+	var box: BoxShape3D = collision.shape
+	var center: Vector3 = collision.to_global(Vector3(0, -box.size.y * 0.5, 0))
+	var along: Vector3 = -collision.global_basis.x.normalized()
+	var across: Vector3 = collision.global_basis.z.normalized()
+	print("RELOAD COVER MAP: ", wall.get_path(), " size=", box.size, " center=", center)
+	check(wall.is_low_cover(), "使用当前保存地图的真实低掩体碰撞")
+	player.global_position = center - across * 4.0
 	var action = ai.actions[&"reload"]
 	check(action.config_section == &"cover" and action._setting(&"reload_cover_preference", -1.0) == 6.0 and action._setting(&"reload_cover_preference_distance", -1.0) == 4.0, "换弹偏好归原Cover参数段且默认值可查询")
-	await _reset(ai, actor, center + Vector3.BACK * 1.1)
+	await _reset(ai, actor, center + across * (box.size.z * 0.5 + 0.8))
+	_check_multileg_credit(action, actor)
+	if OS.get_cmdline_user_args().has("--route-only"):
+		scene.queue_free()
+		await process_frame
+		print("RELOAD ROUTE: %d/%d passed" % [checks - failures, checks])
+		quit(1 if failures else 0)
+		return
 	var starting_position: Vector3 = actor.global_position
 	var selected_here := false
 	var actual_crouch := false
@@ -60,7 +80,7 @@ func _run() -> void:
 	check(no_fire and actor.ammo.magazine_rounds == actor.weapon.magazine_capacity, "蹲姿换弹完成前不射击且正常补满")
 
 	# 保留完整候选池和空缓存，依靠已有Utility选择附近安全掩体。
-	await _reset(ai, actor, center + Vector3.BACK * 2.8)
+	await _reset(ai, actor, center + across * (box.size.z * 0.5 + 2.5))
 	starting_position = actor.global_position
 	var chose_cover := false
 	var reload_crouched := false
@@ -88,8 +108,8 @@ func _run() -> void:
 	# 从实际完整AI与满匣开始，不手工选换弹或修改共同切换优势。
 	Fixture.set_training_action(ai, &"attack_position", true)
 	action = ai.actions[&"reload"]
-	player.global_position = center + Vector3(-0.41789, 0, -0.818408)
-	await _reset(ai, actor, center + Vector3(2.21207, 0, 0.404255))
+	player.global_position = center - along * 0.41789 - across * (box.size.z * 0.5 + 0.318408)
+	await _reset(ai, actor, center + along * (box.size.x * 0.5 + 0.71207) + across * 0.404255)
 	actor.ammo.magazine_rounds = actor.weapon.magazine_capacity
 	shots = actor.shot_count
 	var fired_empty := false
@@ -99,6 +119,7 @@ func _run() -> void:
 	var empty_at := -1
 	var reload_at := -1
 	var resumed_at := -1
+	var action_frames := {}
 	# 打空前的实际蹲起轮次保留900帧上限；换弹接续从打空事件计时。
 	# 预算仅由已有换弹、恢复、火控暂停、有限蹲起及一次重评/保持组成。
 	var resume_seconds: float = actor.weapon.reload_seconds + actor.weapon.stabilize_seconds + actor.weapon.accuracy_recovery_delay
@@ -111,6 +132,8 @@ func _run() -> void:
 		await physics_frame
 		ai._physics_process(STEP)
 		actor._physics_process(STEP)
+		var action_id: StringName = ai.utility_current.get("id", &"none")
+		action_frames[action_id] = int(action_frames.get(action_id, 0)) + 1
 		if actor.shot_count >= shots + actor.weapon.magazine_capacity and actor.ammo.magazine_rounds == 0:
 			fired_empty = true
 			if empty_at < 0: empty_at = frame
@@ -125,10 +148,12 @@ func _run() -> void:
 	check(fired_empty and saw_reload and reload_at - empty_at <= 90, "实况低墙短边完整交战自然打空后及时自主换弹，不停在旧架枪方案")
 	check(crouched_reload and resumed_fire and resumed_at - empty_at <= resume_frames, "实况空匣接续真正蹲姿换弹并恢复实际射击")
 	print("RELOAD LIVE CYCLE: empty frame=%d, reload frame=%d, resumed frame=%d, post-empty budget=%d" % [empty_at, reload_at, resumed_at, resume_frames])
-	player.global_position = center + Vector3.FORWARD * 4.0
+	# 区分未打空、未开始换弹与换弹后未恢复射击，不能把所有超时都解释成换弹卡住。
+	print("RELOAD LIVE STATE: shots=%d, rounds=%d, actions=%s, position=%s" % [actor.shot_count - shots, actor.ammo.magazine_rounds, action_frames, actor.global_position])
+	player.global_position = center - across * 4.0
 
 	# 参数只改变显式信用，候选的真实时间、暴露和信息代价不能跟着变。
-	await _reset(ai, actor, center + Vector3.BACK * 2.8)
+	await _reset(ai, actor, center + across * (box.size.z * 0.5 + 2.5))
 	ai.context.update_evidence(0.0, ai.perception.can_see_player())
 	for frame in 80:
 		await physics_frame
@@ -178,7 +203,7 @@ func _run() -> void:
 		var best: Dictionary = _winner(ai, weighted)
 		check(ai.action_selector.choose_option([best, {"id": &"better", "cost": best.cost - 0.1}]).id == &"better", "其他更低共同代价仍能胜过掩体换弹")
 
-	await _reset(ai, actor, center + Vector3.BACK * 1.1)
+	await _reset(ai, actor, center + across * (box.size.z * 0.5 + 0.8))
 	ai.context.update_evidence(0.0, ai.perception.can_see_player())
 	ai.training.profile.set_setting(&"cover", &"reload_cover_preference", 0.0)
 	var here: Dictionary = action.collect_candidates(true)[0]
@@ -215,6 +240,27 @@ func _reset(ai, actor, position: Vector3) -> void:
 	actor.ammo.magazine_rounds = 0
 	actor.look_at(ai.context.player.global_position)
 	for frame in 6: await physics_frame
+	check(await Fixture.wait_for_camera(actor), "真实跟随相机已到达当前掩体交战位置")
+
+func _check_multileg_credit(action, actor) -> void:
+	# 路线消费合同：由实际打包器生成两次翻越，故意不含旧before/after别名。
+	# 不注入自主运行的候选或宣称这些纯值路线已通过物理导航。
+	var start: Vector3 = actor.global_position
+	var segments: Array[Dictionary] = [
+		{"kind": &"walk", "points": PackedVector3Array([start, start + Vector3(0, 0, 0.2)])},
+		{"kind": &"vault", "entry": start + Vector3(0, 0, 0.2), "exit": start + Vector3(0, 0, 0.6)},
+		{"kind": &"walk", "points": PackedVector3Array([start + Vector3(0, 0, 0.6), start + Vector3(0, 0, 1.0)])},
+		{"kind": &"vault", "entry": start + Vector3(0, 0, 1.0), "exit": start + Vector3(0, 0, 1.4)},
+		{"kind": &"walk", "points": PackedVector3Array([start + Vector3(0, 0, 1.4), start + Vector3(0, 0, 1.6)])}]
+	var route: Dictionary = preload("res://scripts/enemy/services/enemy_navigation_route.gd")._pack(segments, 1, start + Vector3(0, 0, 1.6))
+	var candidate := {"destination": {"hide": route.destination}, "route": route, "outcome": {"exposed_seconds": 0.0}}
+	var threat := start + Vector3(20, 0, 0)
+	check(not route.has("before") and action._cover_credit(candidate, 4.0, threat) > 0.0, "两次翻越的完整摘要能正常评估附近换弹掩体收益")
+	segments[2].points = PackedVector3Array([start + Vector3(0, 0, 0.6), start + Vector3(0, 0, 7), start + Vector3(0, 0, 1.0)])
+	candidate.route = preload("res://scripts/enemy/services/enemy_navigation_route.gd")._pack(segments, 1, route.destination)
+	check(action._cover_credit(candidate, 4.0, threat) == 0.0, "两次翻越之间的长绕行计入总路程，不领取附近掩体偏好")
+	candidate.route = {"before": PackedVector3Array([start, start + Vector3(0, 0, 0.2)]), "vault": {"exit": start + Vector3(0, 0, 0.6)}, "after": PackedVector3Array([start + Vector3(0, 0, 0.6), route.destination])}
+	check(action._cover_credit(candidate, 4.0, threat) > 0.0, "旧单翻越路线继续消费相同的附近换弹偏好")
 
 func _winner(ai, options: Array) -> Dictionary:
 	var scored: Array = []

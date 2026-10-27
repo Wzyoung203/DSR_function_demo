@@ -1,14 +1,14 @@
 extends RefCounted
 
-## Old action fixtures explicitly exercise the personal Training compatibility path.
-## The saved arena's shared default is covered by the team scene integration test.
-static func legacy_scene() -> Node:
+## Personal-action fixtures have no implicit team authority. Team tests explicitly
+## attach a Squad or bind configuration; saved-scene integration loads Main directly.
+static func unbound_scene() -> Node:
 	var scene = load("res://scenes/main.tscn").instantiate()
 	var arena: Node = scene.get_node("Arena")
-	# Also usable with the pre-migration runtime in paired baseline comparisons.
+	# Remove team configuration only from this instantiated fixture.
 	if arena.get("team_cooperation_bindings") is Array:
 		arena.team_cooperation_bindings.clear()
-	# Legacy behavior tests explicitly use the old membership/configuration path.
+	# These fixtures explicitly exercise unbound personal behavior.
 	# Unwrap only the test instance; saved scene integration loads Main directly.
 	for member in members(arena):
 		if member.get_parent() == arena: continue
@@ -28,7 +28,7 @@ static func legacy_scene() -> Node:
 ## Preserve the primary actor's complete behavior; remove unmeasured saved peers
 ## before they enter the tree so the declared population is the real population.
 static func single_member_scene() -> Node:
-	var scene := legacy_scene()
+	var scene := unbound_scene()
 	var arena := scene.get_node("Arena")
 	var primary := primary_enemy(scene)
 	for child in arena.get_children():
@@ -62,6 +62,23 @@ static func attach_squad(area: Node, actors: Array, level: int) -> Node3D:
 	for actor in actors: actor.reparent(squad)
 	return squad
 
+## Explicit conversion input for tests that must retain direct-child node paths.
+## It exercises the same coordinator protocol as a scene Squad.
+static func bind_team(area: Node, level: int, group: StringName = &"") -> void:
+	var binding := EnemyTeamCooperationBinding.new()
+	binding.communication_group = group
+	binding.profile.level = level
+	area.team_cooperation_bindings.append(binding)
+	if area.is_inside_tree(): area.enemy_environment()
+
+static func reserve_position(context, point: Vector3, duration: float = 1.0, owner: StringName = &"search") -> Dictionary:
+	context.prepare_coordination_evaluation()
+	var offer: Dictionary = context._basic_coordination_offer({"id": owner, "destination": {"position": point}})
+	var token: Dictionary = context.cooperation.prepare_reservation(context, offer, duration)
+	if not token.is_empty() and context.cooperation.commit_reservation(context, token): return token
+	context.cooperation.rollback_reservation(context, token)
+	return {}
+
 static func advance_evaluation(ai, visible: bool) -> void:
 	ai.context.sees_player = visible
 	ai.context.spatial.advance_evaluation()
@@ -90,6 +107,13 @@ static func configure_timing(enemy: Node) -> void:
 	weapon.target_move_accuracy_loss_per_meter_slow = 0.0
 	weapon.target_move_accuracy_loss_per_meter_fast = 0.0
 	enemy.equip_weapon(weapon)
+
+## 固定射击夹具会把玩家传送到竞技场；先让真实跟随镜头入位，再测机械计时。
+static func wait_for_camera(member: Node3D) -> bool:
+	for frame in 120:
+		if preload("res://scripts/systems/combat_view.gd").contains_actor(member, 8.0): return true
+		await member.get_tree().physics_frame
+	return false
 
 
 # 决策测试主动制造低于70%的跟枪状态，检查等待压力能否让AI继续开火。

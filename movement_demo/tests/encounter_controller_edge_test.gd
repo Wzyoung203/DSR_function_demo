@@ -76,7 +76,7 @@ func _check_dead_player_reward() -> void:
 
 	context["arena"].combat_cleared.emit(context["arena"])
 	check(await _wait_until(tree, func() -> bool: return board.visible and tree.paused), "死亡场景前奖励面板已暂停打开")
-	health.receive_hit(1000.0)
+	health.receive_hit(health.max_health)
 	check(player.is_dead(), "真实伤害使玩家死亡")
 	check(not board.visible, "死亡后立即隐藏奖励面板")
 	check(board.process_mode == Node.PROCESS_MODE_DISABLED, "死亡后立即禁用奖励面板输入")

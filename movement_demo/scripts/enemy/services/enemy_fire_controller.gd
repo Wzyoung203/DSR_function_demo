@@ -28,25 +28,11 @@ var ranged_min_distance: float:
 func setup(shared_context) -> void:
 	context = shared_context
 	fire_decision.setup(context, &"fire_decision")
-	actor.hit_received.connect(_on_hit_received)
-	context.event_received.connect(_on_evidence_event)
 
 
 func detach() -> void:
-	if actor.hit_received.is_connected(_on_hit_received):
-		actor.hit_received.disconnect(_on_hit_received)
-	if context.event_received.is_connected(_on_evidence_event):
-		context.event_received.disconnect(_on_evidence_event)
 	fire_decision.context = null
 	context = null
-
-func _on_hit_received(damage: float, _attacker_position: Vector3) -> void:
-	if is_finite(damage) and damage > 0.0:
-		actor.apply_aim_penalty(float(context.setting(&"tactics", &"damage_accuracy_penalty", 0.15)))
-
-func _on_evidence_event(event: StringName, _data: Dictionary) -> void:
-	if event == &"near_shot":
-		actor.apply_aim_penalty(float(context.setting(&"tactics", &"nearby_shot_accuracy_penalty", 0.02)))
 
 func update(delta: float, visible: bool, moving: bool, intent: Dictionary) -> void:
 	request = intent
@@ -121,15 +107,15 @@ func update_shooting(delta: float, sees_player: bool, movement_requested: bool) 
 		var support_pressure: float = suppression_pressure(request, moving) if request.get("support_intent", false) else 0.0
 		if fire_decision.choose_action(elapsed, stability, fire_stability_target, recovery_rate, close_pressure, support_pressure) != fire_decision.Action.FIRE:
 			return
-	if actor.try_fire():
-		fire_decision.on_shot_fired()
-		_record_burst_shot()
-		shot_fired.emit()
+	_try_fire()
 
 func _update_suppression_shooting(delta: float, movement_requested: bool) -> void:
 	fire_decision.reset()
 	# 压制不保留旧目击的反应进度；重新看到目标仍需遵守原反应时间。
 	fire_reaction_elapsed = 0.0
+	if context.commanded() and not context.command_memory_fire_authorized(request):
+		actor.update_weapon(delta)
+		return
 	# 仅此动作允许未目击时按记忆开火；不读取墙后玩家的当前坐标。
 	if not actor.can_use_firearms() or not context.is_arena_active() or context.player.is_dead() or context.player.is_in_dialogue:
 		actor.update_weapon(delta)
@@ -150,9 +136,18 @@ func _update_suppression_shooting(delta: float, movement_requested: bool) -> voi
 		context.invalidate_utility()
 		return
 	if not context.cooperation_line_safe(actor.get_shot_origin(), point): return
-	if actor.try_fire():
+	_try_fire()
+
+func _try_fire() -> bool:
+	var attempts_before: int = actor.shot_attempt_count
+	var fired: bool = actor.try_fire()
+	if fired: fire_decision.on_shot_fired()
+	if actor.shot_attempt_count > attempts_before:
+		# 屏幕外跳过也消耗一次点射机会，不能下一帧重新抽取或延长本轮。
 		_record_burst_shot()
-		shot_fired.emit()
+		if not fired: fire_decision.reset()
+	if fired: shot_fired.emit()
+	return fired
 
 func _record_burst_shot() -> void:
 	fire_interval_remaining = shot_interval_seconds()
@@ -177,7 +172,7 @@ func burst_limit(support_intent: bool = false) -> int:
 	var normal := maxi(1, burst_shot_count)
 	# A label alone grants nothing: group/target/freshness and real unmet demand
 	# are checked by the existing cooperation board, including actual reloads.
-	if support_intent and context.cooperation_support_pressure() > 0.0:
+	if support_intent and context.command_support_pressure() > 0.0:
 		return maxi(normal, support_burst_shot_count)
 	return normal
 
@@ -202,10 +197,10 @@ func close_suppression_pressure() -> float:
 ## Intent can express urgency, but only current observations/authorized retreat
 ## or real unmet team demand supply pressure. It never bypasses firing gates.
 func suppression_pressure(intent: Dictionary = {}, moving: bool = false) -> float:
-	var pressure: float = maxf(context.cooperation_support_pressure(), close_suppression_pressure())
+	var pressure: float = maxf(context.command_support_pressure(), close_suppression_pressure())
 	if intent.get("pressure_reason", &"") == &"retreat" and context.sees_player and moving:
 		var current: Dictionary = context.utility_current
-		if intent.get("owner", &"") == current.get("id", &"") and current.get("mode", &"") == &"covering_retreat" and current.get("support_request", {}).get("kind", &"") == &"retreat":
+		if intent.get("owner", &"") == current.get("id", &"") and current.get("mode", &"") == &"covering_retreat":
 			pressure = maxf(pressure, 1.0)
 	return clampf(pressure, 0.0, 1.0)
 
