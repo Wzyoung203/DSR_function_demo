@@ -63,10 +63,10 @@ func _check_factories() -> void:
 		and not flag.flag_value,
 		"flag() 构造旗标条件并保留真假"
 	)
-	var item = QuestConditionScript.item(&"keycard", 2)
+	var item = QuestConditionScript.item(&"quest_item", 2)
 	check(
 		item.source == QuestConditionScript.Source.ITEM
-		and item.key == &"keycard"
+		and item.key == &"quest_item"
 		and item.min_count == 2,
 		"item() 构造物品条件并保留数量"
 	)
@@ -94,7 +94,7 @@ func _check_describe() -> void:
 		"旗标条件描述包含真假"
 	)
 	check(
-		QuestConditionScript.item(&"keycard", 2).describe() == "物品 keycard >= 2",
+		QuestConditionScript.item(&"quest_item", 2).describe() == "物品 quest_item >= 2",
 		"物品条件描述包含数量"
 	)
 	check(

@@ -12,40 +12,40 @@
 
 ```text
 scripts/world/interactable.gd                 交互物节点（范围、提示、输入、条件、效果派发）
-scripts/world/quest_gate_reader.gd            任务状态门禁交互物，接取 A 任务后才允许操作
+scripts/world/quest_portal.gd                 任务状态传送门，接取 A 任务后才允许操作
+scripts/world/interactions/change_scene_effect.gd  交互后切换目标场景
 scripts/world/interactions/interaction_context.gd   一次交互的注入上下文
 scripts/world/interactions/interaction_effect.gd    效果基类
 scripts/world/interactions/*_effect.gd              具体效果
-scripts/world/sliding_barrier.gd              纯位移屏障，由交互物通过方法调用驱动
 scenes/world/interactable.tscn                可复用交互物场景
-scenes/world/access_gate.tscn                 门禁读卡器 + 屏障
+scenes/world/objects/quest_portal.tscn        酒馆门口的任务传送门
 scenes/world/objects/                         各个具体交互物场景
 scenes/ui/game_state_debug.tscn               调试面板
 ```
 
 ## 可复用示例
 
-2026-10-23 按用户要求，主场景已移除门禁卡、酒杯、终端、唱片机及门禁读卡器／屏障。下表记录保留的独立示例资源与原演示位置；组件测试由 `tests/interaction_fixture.gd` 显式装配，不要求主场景摆放任务互动物品。
+2026-10-27 按用户要求，主场景删除门禁卡和对应门禁屏障，改为酒馆门口的任务传送门。酒杯、终端和唱片机继续保留。
 
 | 实例 | 位置 | 交互 | 结果 |
 | --- | --- | --- | --- |
-| 门禁卡 | NPC 附近 | 拾取 | 写入 `keycard` 与 `has_keycard`，物体消失 |
 | 酒杯 | 主房间南侧 | 查看 | 打开线索对话，置 `saw_wine_clue` |
 | 终端 | 主房间东侧 | 使用一次 | 打开通道信息对话，置 `terminal_read` |
 | 唱片机 | 主房间东南 | 使用，可重复 | 开／关音乐，写入 `music_playing`；接取任务前后都能操作，接取前操作不会推进任务状态 |
-| 竞技场入口 | 通往竞技场的通道口 | 打开 | 未接 A 任务时提示并拒绝；任务进行中后按 E 打开屏障并置 `arena_access` |
+| 关卡传送门 | 酒馆东侧门口 | 进入 | 未接 A 任务时提示并拒绝；任务进行中后按 E 切换到第1关 |
 
-竞技场入口读取 `QuestController.status_of("task_a")`，不要求门禁卡。门禁卡物体仍保留为独立可拾取物品，
-但不再参与竞技场开门条件。
+关卡传送门读取 `QuestController.status_of("task_a")`，不读取物品或自行修改任务状态。目标场景由
+`ChangeSceneEffect.scene_path` 配置，`quest_portal.tscn` 指向第1关。
 
-对话影响是打开交互物自己的对话资源，不动 NPC 对话；战斗影响是通道屏障决定能否进入竞技场，以及音乐声音事件进入既有听觉系统。
+对话影响是打开交互物自己的对话资源，不动 NPC 对话；音乐声音事件继续进入既有听觉系统。
 
 ## 新增交互物
 
 1. 实例化 `scenes/world/interactable.tscn`，或复制 `scenes/world/objects/` 下的一个物体场景。
 2. 设置 `display_name`、`verb` 与外观网格；需要条件时填 `required_items`、`required_flags` 和 `blocked_hint`。
 3. 在 `effects` 里加效果资源。常用组合：拾取用 `GiveItemEffect`，信息用 `ShowDialogueEffect`，
-   单次写入用 `SetFlagEffect`，开／关切换用 `ToggleFlagEffect`，声音用 `EmitNoiseEffect`。
+   单次写入用 `SetFlagEffect`，开／关切换用 `ToggleFlagEffect`，切换场景用 `ChangeSceneEffect`，
+   声音用 `EmitNoiseEffect`。
 4. 需要驱动门、机关或生成器时用 `CallMethodEffect` 指向目标节点与方法，交互物本身不需要认识目标类型。
 5. 把物体场景放进关卡场景，放入需要交互演示的独立场景。
 
@@ -68,5 +68,7 @@ scenes/ui/game_state_debug.tscn               调试面板
 ```
 
 该检查覆盖输入守卫、条件与阻断提示、各实例结果、一次性与可重复行为，以及把 `state_path` 换成测试替身后的写入结果。
+
+`quest_portal_test.gd` 使用真实酒馆与 `QuestController` 检查未接任务时阻断、接取后进入第1关，并确认门禁卡和旧门禁实例已删除。
 
 Godot 4.7.2 下，只要进程里打开过对话，退出时就会报告 Dialogue Manager 的少量资源未释放（`resources still in use at exit`），与本功能无关；判断通过与否看 `FAIL` 与 `SCRIPT ERROR` 行。

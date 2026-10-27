@@ -93,12 +93,10 @@ func run_checks() -> void:
 	var ui = scene.get_node("DialogueUI")
 	var npc_a = scene.get_node("NPC")
 	var quests = scene.get_node("QuestController")
-	var keycard = scene.get_node("Interactables/Keycard") as Interactable
+	var portal = scene.get_node("Interactables/LevelPortal") as Interactable
 	var wine = scene.get_node("Interactables/WineGlass") as Interactable
 	var terminal = scene.get_node("Interactables/Terminal") as Interactable
 	var record = scene.get_node("Interactables/RecordPlayer") as Interactable
-	var reader = scene.get_node("Interactables/AccessGate/Reader") as Interactable
-	var barrier = scene.get_node("Interactables/AccessGate/Barrier")
 	var probe := NoiseProbe.new()
 	probe.add_to_group(&"hearing_listener")
 	root.add_child(probe)
@@ -106,13 +104,12 @@ func run_checks() -> void:
 
 	check(state != null, "GameState 已注册")
 	check(
-		keycard != null and wine != null and terminal != null and record != null
-		and reader != null and barrier != null,
-		"五个交互物实例都在主场景里"
+		portal != null and wine != null and terminal != null and record != null,
+		"四个保留交互物实例都在主场景里"
 	)
 	check(
-		keycard.effects.size() == 2 and wine.effects.size() == 2 and terminal.effects.size() == 2
-		and record.effects.size() == 2 and reader.effects.size() == 2,
+		portal.effects.size() == 1 and wine.effects.size() == 2 and terminal.effects.size() == 2
+		and record.effects.size() == 2,
 		"每个交互物的效果资源都装配成功"
 	)
 	var standalone: Node = load("res://scenes/world/interactable.tscn").instantiate()
@@ -140,13 +137,12 @@ func run_checks() -> void:
 	check(not terminal.has_interacted, "对话中按 E 不触发交互物")
 	await finish_dialogue(ui)
 
-	# 门禁条件：未接取 A 的任务时拒绝，接取后才允许打开。
-	stand_at(player, reader)
+	# 传送门条件：未接取 A 的任务时拒绝，接取后才允许进入。
+	stand_at(player, portal)
 	await settle()
-	check(reader.prompt.visible and reader.prompt.text == "需要先接取 A 的任务", "未接任务时显示门禁阻断提示")
+	check(portal.prompt.visible and portal.prompt.text == "需要先接取 A 的任务", "未接任务时显示传送门阻断提示")
 	check(press_key(KEY_E), "未接任务时仍消费按键")
-	check(not barrier.is_open, "未接任务时屏障不打开")
-	check(not state.is_flag_set(&"arena_access"), "未接任务时不置位通行旗标")
+	check(not portal.has_interacted, "未接任务时传送门不执行")
 
 	await ui.open_dialogue(player, npc_a.dialogue_resource, "start")
 	await settle()
@@ -174,22 +170,9 @@ func run_checks() -> void:
 	ui._close_dialogue()
 	await settle()
 
-	stand_at(player, reader)
+	stand_at(player, portal)
 	await settle()
-	check(reader.prompt.text == "E 打开 竞技场入口", "接取任务后门禁变为可打开")
-	check(press_key(KEY_E), "接取任务后按 E 打开竞技场入口")
-	check(barrier.is_open, "接取任务后屏障打开")
-	check(state.is_flag_set(&"arena_access"), "接取任务后置位通行旗标")
-	check(not state.has_item(&"keycard"), "开门不要求门禁卡")
-
-	# 拾取门禁卡。
-	stand_at(player, keycard)
-	await settle()
-	check(keycard.prompt.text == "E 拾取 门禁卡", "拾取提示使用配置的动词")
-	check(press_key(KEY_E), "按 E 拾取门禁卡")
-	check(state.has_item(&"keycard") and state.get_item_count(&"keycard") == 1, "门禁卡写入物品栏")
-	check(not keycard.visible, "拾取后交互物隐藏")
-	check(not keycard.can_interact(player), "拾取后不再重复触发")
+	check(portal.prompt.text == "E 进入 关卡1", "接取任务后传送门变为可进入")
 
 	# 唱片机：接取任务前后都能操作，重复使用在开／关之间切换。
 	stand_at(player, record)

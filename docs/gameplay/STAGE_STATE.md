@@ -1,6 +1,6 @@
 # 阶段、任务与 NPC 状态
 
-2026-10-27：工程默认入口已改为连续五关，第1关直接启动；下述酒馆任务循环仍保留在 `scenes/main.tscn` 功能演示中，可单独 F6 运行。五关的按钮切换只订阅波次完成信号，不读写本文三个控制器的状态，见[五关说明](PLAY_GUIDE.md)。
+2026-10-27：工程默认入口为 `scenes/main.tscn`，F5 直接进入酒馆。接取 A 的任务后，酒馆门口的传送门解锁并切换到第1关；五关的按钮切换只订阅波次完成信号，不读写本文三个控制器的状态，见[五关说明](PLAY_GUIDE.md)。
 
 这份文档说明“酒馆接任务 → 前往场地 → 战斗 → 返回结算”这条循环现在由谁掌控、任务条件怎么配、
 任务状态怎么看，以及它和对话、交互物、竞技场的关系。设计稿在 `docs/superpowers/specs/`（仅本地保留）。
@@ -78,8 +78,9 @@
 任务一现在不只是“进过竞技场又离开”，而是由 `EncounterController`（`scripts/systems/stage/encounter_controller.gd`）
 串起“清场 → 奖励 → 返回”：
 
-1. A 的对话说明目标是消灭竞技场里的敌人。接受后 `help_choice` 写为 `accepted`，任务进入进行中并解锁竞技场入口；
-   前往 `Arena/CombatZone` 后进入“场地战斗”。
+1. A 的对话说明目标是消灭竞技场里的敌人。接受后 `help_choice` 写为 `accepted`，任务进入进行中；
+   酒馆门口 `Interactables/LevelPortal` 随后解锁，按 E 可切换到 `scenes/world/levels/lvl_1.tscn`。
+   旧门禁卡与门禁屏障已删除。
 2. 竞技场所有已注册敌人死亡时，`Arena` 发出 `combat_cleared`。控制器只在玩家存活、`task_a` 进行中且玩家在
    `site` 区域时响应；等待 5 秒后再次复核，再把场景树暂停并显示奖励面板。重复清场不会启动第二个结算。
 3. 奖励面板 `scenes/ui/reward_board.tscn`（`scripts/ui/reward_board.gd`）默认隐藏，`process_mode` 设为 ALWAYS，
@@ -93,8 +94,8 @@
 6. 配置表里 `task_a` 的完成条件因此是 `task_a_returned == returned`（`STATE_FIELD`），写入后任务完成，
    阶段进入 `RETURNED`（返回结算）。
 
-这是同场景内的传送模拟：酒馆与竞技场都在 `main.tscn` 里，`ReturnPortal` 和 `TavernReturnPoint` 只是同一场景中的
-两个位置，并未加载独立场景。真正的跨场景出发／返回仍属于后续工作。`system_progress` 目前也只累计并显示在任务面板上，
+酒馆门口到第1关现在使用真实场景切换；上述竞技场奖励闭环仍保存在同一 `main.tscn` 内，`ReturnPortal` 和
+`TavernReturnPoint` 是其中的两个位置。五关通关后返回酒馆尚未接入。`system_progress` 目前只累计并显示在任务面板上，
 尚未用于章节解锁或后续内容门槛。
 
 ## 阶段窗口
@@ -137,7 +138,7 @@
 
 `scenes/ui/quest_panel.tscn` + `scripts/ui/quest_panel.gd` 挂在 `main.tscn` 上，默认隐藏，按 Tab 显示或隐藏。
 2026-10-23 上游曾按当时要求从主场景移除面板；2026-10-27 用户确认合并时保留本地任务／奖励闭环，
-因此当前 `main.tscn` 重新挂载任务面板，默认五关入口不挂载。面板半透明、鼠标事件忽略；Tab 使用运行时
+因此当前 `main.tscn` 挂载任务面板，五关场景不挂载。面板半透明、鼠标事件忽略；Tab 使用运行时
 输入动作绑定，不依赖 `project.godot` 中的输入条目。面板只读任务控制器和状态节点：
 
 - 一行一个任务，格式“任务名：状态”，`target_area` 非空时附“（场地 xxx）”；
@@ -174,7 +175,7 @@
 4. 条件示例：
    - 对话接取：`source=0`、`key=help_choice`、`state_value=accepted`；
    - 交互开关：`source=1`、`key=music_playing`（`flag_value` 默认真）；
-   - 拾取物品：`source=2`、`key=keycard`、`min_count=1`；
+   - 拾取物品：`source=2`、`key=quest_item`、`min_count=1`；
    - 去过竞技场又离开：`source=4` + `source=5`、`key=arena` 两条都要填。
 5. 区域要挂 `scripts/world/zone_volume.gd` 并填 `zone_id`（现成：酒馆 `tavern`、竞技场 `arena`）；
    交互物要填 `interact_id`（留空会回退节点名）；NPC 要填 `npc_id`（`npc_a`、`npc_b`）。

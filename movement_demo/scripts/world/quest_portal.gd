@@ -1,9 +1,7 @@
-class_name QuestGateReader
+class_name QuestPortal
 extends Interactable
 
-## 任务门禁读卡器：保留通用交互物输入与效果，只增加“任务进行中”这一前提。
-## 任务状态仍由 QuestController 唯一维护，本节点只读查询并刷新提示。
-
+## 读取任务状态的传送门；任务状态仍由 QuestController 唯一维护。
 const QuestControllerScript := preload("res://scripts/systems/stage/quest_controller.gd")
 
 @export var quest_id: StringName = &"task_a"
@@ -13,7 +11,7 @@ var _quests: Node
 
 func _ready() -> void:
 	super()
-	call_deferred("_bind_quests")
+	call_deferred(&"_bind_quests")
 
 
 func conditions_met() -> bool:

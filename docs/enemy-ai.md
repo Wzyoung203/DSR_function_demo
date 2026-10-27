@@ -834,7 +834,7 @@ python movement_demo/tests/enemy/run_enemy_regressions.py --godot E:/Godot/Godot
 ### 在本项目运行
 
 1. 使用当前验证的 Godot 4.7.2 标准版导入 `movement_demo/project.godot`，等待资源扫描完成。
-2. 默认 F5 从五关入口开始；旧任务／竞技场功能演示请打开 `res://scenes/main.tscn` 后按 F6。编辑敌人时打开 `res://scenes/arena.tscn`。
+2. 默认 F5 从酒馆开始，接取 A 任务后经门口传送门进入第1关；编辑敌人时打开 `res://scenes/arena.tscn`。
 3. 给 `Enemy/UnitType.profile` 选择 `res://resources/enemy/units/ranged.tres` 或自己的兵种；给 `Enemy/Training.profile` 选择训练资源。
 4. 在 Training 顶部“战术解锁”勾选动作，保存场景及修改的外部资源。武器在 Enemy 的 Weapon 中调整，现有示例位于 `resources/weapons/`。
 5. 运行后进入 CombatZone，观察初次接敌、失视、搜索、换弹、死亡和离场复位。检查器无战术选项时，确认插件启用、同一敌人的 UnitType 与 Training 都有资源；不要在停止运行后继续查看旧 Remote 节点。

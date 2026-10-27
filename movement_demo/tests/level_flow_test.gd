@@ -18,7 +18,7 @@ func _run() -> void:
 	if not fullscreen_proof:
 		root.size = Vector2i(1152, 720)
 		root.content_scale_size = root.size
-	check(ProjectSettings.get_setting("application/run/main_scene") == Flow.LEVELS[0], "默认主入口是第1关")
+	check(ProjectSettings.get_setting("application/run/main_scene") == "res://scenes/main.tscn", "默认主入口是酒馆")
 	change_scene_to_file(Flow.LEVELS[0])
 	await scene_changed
 	await process_frame
