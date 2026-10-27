@@ -1,5 +1,7 @@
 extends CanvasLayer
 
+const SceneTransition = preload("res://scripts/systems/scene_transition.gd")
+
 ## 只衔接已保存的五关；完成仍由 EnemyWaves 判定，死亡重开仍由 Health 执行。
 const LEVELS: Array[String] = [
 	"res://scenes/world/levels/lvl_1.tscn",
@@ -68,7 +70,7 @@ func _continue() -> void:
 
 func _change_scene(path: String) -> void:
 	_restore_pause()
-	var result := get_tree().change_scene_to_file(path)
+	var result: Error = await SceneTransition.change_scene(get_tree(), path)
 	if result != OK:
 		_transition_pending = false
 		_show_result("关卡加载失败", "无法加载下一关，请重试。", "重试", path)

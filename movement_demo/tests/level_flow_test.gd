@@ -37,6 +37,14 @@ func _run() -> void:
 	for number in range(1, 6):
 		var scene := current_scene
 		check(scene.scene_file_path == Flow.LEVELS[number - 1], "按顺序进入第%d关" % number)
+		if number == 2:
+			var fallback: Environment = scene.get_world_3d().fallback_environment
+			check(
+				fallback != null
+				and fallback.ambient_light_source == Environment.AMBIENT_SOURCE_DISABLED
+				and fallback.reflected_light_source == Environment.REFLECTION_SOURCE_DISABLED,
+				"按钮切关后恢复中性默认渲染环境"
+			)
 		var guide = scene.get_node("LevelFlow/PlayGuide")
 		var player = scene.get_node("Player")
 		var combat = player.get_node("Combat")

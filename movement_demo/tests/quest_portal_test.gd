@@ -56,6 +56,14 @@ func _run() -> void:
 	_check(portal.interact(player), "接取任务后可以进入传送门")
 	var loaded: Node = await _wait_for_scene(LEVEL_ONE)
 	_check(loaded != null and loaded.scene_file_path == LEVEL_ONE, "传送门加载第一关场景")
+	var world: World3D = loaded.get_world_3d() if loaded != null else null
+	var fallback: Environment = world.fallback_environment if world != null else null
+	_check(
+		fallback != null
+		and fallback.ambient_light_source == Environment.AMBIENT_SOURCE_DISABLED
+		and fallback.reflected_light_source == Environment.REFLECTION_SOURCE_DISABLED,
+		"传送后恢复中性默认渲染环境"
+	)
 	await _finish(loaded)
 
 

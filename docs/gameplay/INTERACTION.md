@@ -35,7 +35,8 @@ scenes/ui/game_state_debug.tscn               调试面板
 | 关卡传送门 | 酒馆东侧门口 | 进入 | 未接 A 任务时提示并拒绝；任务进行中后按 E 切换到第1关 |
 
 关卡传送门读取 `QuestController.status_of("task_a")`，不读取物品或自行修改任务状态。目标场景由
-`ChangeSceneEffect.scene_path` 配置，`quest_portal.tscn` 指向第1关。
+`ChangeSceneEffect.scene_path` 配置，`quest_portal.tscn` 指向第1关。效果通过共享 `SceneTransition` 切换，
+切换前恢复中性 `World3D` 回退环境，防止目标关卡沿用酒馆的环境光。
 
 对话影响是打开交互物自己的对话资源，不动 NPC 对话；音乐声音事件继续进入既有听觉系统。
 

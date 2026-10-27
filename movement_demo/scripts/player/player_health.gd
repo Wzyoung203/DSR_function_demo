@@ -1,5 +1,7 @@
 extends CanvasLayer
 
+const SceneTransition = preload("res://scripts/systems/scene_transition.gd")
+
 ## 通用有效命中通知，医疗中断等仍订阅此信号；武器效果由携带攻击快照的独立入口处理。
 signal hit_received(damage: float)
 ## 结算后通知表现层；无敌不产生 damage_applied，但保留上方的原通知。
@@ -152,7 +154,7 @@ func _request_restart() -> void:
 func _restart() -> void:
 	var tree: SceneTree = get_tree()
 	# 仅重载场景；不清空 GameState 中的对话选择。
-	var result: Error = tree.reload_current_scene()
+	var result: Error = await SceneTransition.reload_scene(tree)
 	if result == OK:
 		tree.paused = false
 	else:
