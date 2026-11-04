@@ -23,6 +23,7 @@ SYSTEM_TESTS = [
     "campaign_quest_task_test", "debug_complete_level_test", "combat_clear_signal_test",
     "quest_portal_test", "shop_catalog_test",
     "shop_state_test",
+    "shop_weapon_test",
     "quest_money_reward_test",
 ]
 # The optional interaction prototype is absent from some local project baselines.

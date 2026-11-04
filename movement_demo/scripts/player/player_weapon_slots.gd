@@ -105,6 +105,23 @@ func campaign_snapshot() -> Dictionary:
 	}
 
 
+## 把商店购买的枪械写入指定槽位，并保留另一把武器、医疗包、共享备弹和无关玩家状态。
+## 目标槽位重新以满匣出生；只接受槽位 0/1 且非空、非专用近战 WeaponData。
+func replace_weapon_slot(slot: int, weapon: WeaponData) -> bool:
+	if slot not in [0, 1] or weapon == null or weapon.fire_mode == WeaponData.FireMode.MELEE:
+		return false
+	var snapshot := campaign_snapshot()
+	if slot == 0:
+		snapshot["primary_weapon"] = weapon
+	else:
+		snapshot["secondary_weapon"] = weapon
+	var magazines: Array = snapshot["magazines"]
+	magazines[slot] = weapon.magazine_capacity
+	snapshot["magazines"] = magazines
+	apply_campaign_snapshot(snapshot)
+	return _weapon_at(slot) == weapon
+
+
 func apply_campaign_snapshot(snapshot: Dictionary) -> void:
 	if snapshot.is_empty():
 		return

@@ -197,6 +197,9 @@ func _finish_completion() -> void:
 func request_restart() -> void:
 	if state != &"dead": return
 	_rollback_campaign_restore()
+	var game_state := get_node_or_null("/root/GameState")
+	if game_state != null and game_state.has_method(&"prepare_level_retry_state"):
+		game_state.prepare_level_retry_state()
 	_start_load("", true)
 
 func request_return_to_tavern() -> void:
