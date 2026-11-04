@@ -130,6 +130,10 @@ func set_status(quest_id: StringName, status: int) -> void:
 		var definition := quest_definition(quest_id)
 		if definition != null and definition.money_reward > 0 and _state != null \
 				and _state.has_method(&"claim_task_reward"):
+			# NOTE: 当前酒店检查点补写按任务配置的 stage_index 匹配
+			# completed_level。主线五关的 stage_index 必须与对应关卡编号一致；
+			# 本波暂不重新设计该映射，改为其他任务编号前请先核对
+			# GameState.claim_task_reward 的 checkpoint 匹配条件。
 			_state.claim_task_reward(quest_id, definition.money_reward, definition.stage_index)
 	quest_changed.emit(quest_id, previous, status)
 

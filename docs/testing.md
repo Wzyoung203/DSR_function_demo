@@ -8,8 +8,8 @@
 `shop_catalog_test` 28 项（初始三商品、顺序、按 ID 查询、重复 ID 过滤与武器商品校验）、
 `shop_state_test` 42 项（货币增减、一次性任务发奖、检查点退款／一次性购买回滚／入关快照）、
 `shop_weapon_test` 27 项（`replace_weapon_slot` 校验、主副槽覆盖与当前关重试保留已购枪）、
-`shop_board_test` 18 项（面板隐藏、ALWAYS、行渲染与购买意图回传）、
-`shop_flow_test` 76 项（真实酒馆打开商店、三初始商品购买、武器解锁与一次性隐藏、余额不足、暂停所有权、死亡关闭与边界拒绝）、
+`shop_board_test` 30 项（面板隐藏、ALWAYS、行渲染、购买意图回传、按钮禁用与武器槽位禁用）、
+`shop_flow_test` 92 项（真实酒馆打开商店、三初始商品购买、武器解锁与一次性隐藏、余额不足、空目录／全锁定不暂停、交易顺序退款、暂停所有权、死亡关闭与边界拒绝）、
 `quest_money_reward_test` 9 项（主线各 100、支线 0、只发一次）。
 流程专项 `campaign_flow_test` 98 项、`campaign_checkpoint_test` 17/17、`scene_director_test` 150/150、
 `level_flow_test` 87/87 全部通过；兼容专项 `reward_board_test` 14/14、`campaign_quest_task_test` 32 项通过。

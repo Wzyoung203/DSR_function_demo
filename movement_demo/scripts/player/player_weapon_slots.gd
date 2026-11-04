@@ -71,11 +71,23 @@ func _ready() -> void:
 	_update_display()
 
 func refill_all_ammo() -> void:
-	# 已初始化的 WeaponAmmo 持有该字典引用，必须原地恢复。
-	# 重新绑定槽位，让奖励恢复后的共享池同时重建资源定义与冲突诊断。
+	# 已初始化的 WeaponAmmo 持有该字典引用，必须原地恢复，不能直接换新字典。
+	# 先保留当前所有备弹类型（包括 initial_ammo 之外的类型），再把已配置类型
+	# 抬到至少初始数量；超过初值的库存不会被回退或清掉。
+	var preserved: Dictionary = reserve_ammo.duplicate()
 	_slot_weapons = [null, null]
 	_slot_definitions = [null, null]
-	_initialize_ammo()
+	for supply in initial_ammo:
+		if supply == null or supply.ammo == null or not supply.ammo.has_valid_id():
+			continue
+		_remember_definition(supply.ammo)
+		var key := supply.ammo.ammo_id
+		preserved[key] = maxi(int(preserved.get(key, 0)), maxi(0, supply.amount))
+	for slot in range(2):
+		_bind_slot(slot)
+	reserve_ammo.clear()
+	for key in preserved:
+		reserve_ammo[key] = maxi(0, int(preserved[key]))
 	for slot in range(2):
 		var data := _weapon_at(slot)
 		var state = _ammo_states[slot]
@@ -94,7 +106,9 @@ func can_refill_all_ammo() -> bool:
 		if data == null:
 			continue
 		var state = _ammo_states[slot]
-		if state == null or state.weapon != data or state.magazine_rounds < data.magazine_capacity or state.is_reloading:
+		# 未创建运行状态的已装备槽按出生满匣处理；只有真正存在缺弹、
+		# 状态过期或仍在换弹时才需要补给。
+		if state != null and (state.weapon != data or state.magazine_rounds < data.magazine_capacity or state.is_reloading):
 			return false
 	for supply in initial_ammo:
 		if supply == null or supply.ammo == null:

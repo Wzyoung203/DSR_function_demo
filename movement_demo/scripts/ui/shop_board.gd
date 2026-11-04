@@ -42,6 +42,17 @@ func balance_text() -> String:
 
 
 func press_purchase(item_id: StringName, slot: int) -> bool:
+	if not purchase_enabled(item_id, slot):
+		return false
+	var item := _find_item(item_id)
+	last_purchase = {"item_id": item_id, "slot": slot}
+	purchase_requested.emit(item_id, slot)
+	return true
+
+
+## 只读查询当前行按钮是否可点击；与 press_purchase 使用同一判定，
+## 防止禁用按钮通过测试或其他调用方绕过视觉状态。
+func purchase_enabled(item_id: StringName, slot: int) -> bool:
 	var item := _find_item(item_id)
 	if item.is_empty():
 		return false
@@ -49,11 +60,10 @@ func press_purchase(item_id: StringName, slot: int) -> bool:
 	if is_weapon:
 		if slot not in [0, 1]:
 			return false
-	elif slot != -1:
+		return _slot_enabled(item, slot)
+	if slot != -1:
 		return false
-	last_purchase = {"item_id": item_id, "slot": slot}
-	purchase_requested.emit(item_id, slot)
-	return true
+	return bool(item.get("enabled", true))
 
 
 func show_board() -> void:
@@ -116,17 +126,38 @@ func _build_row(item: Dictionary) -> Control:
 		var buttons := HBoxContainer.new()
 		buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 		buttons.add_theme_constant_override("separation", 12)
-		buttons.add_child(_make_button("覆盖主武器", item_id, 0))
-		buttons.add_child(_make_button("覆盖副武器", item_id, 1))
+		var slots: Array = item.get("slots", [])
+		if slots.is_empty():
+			slots = [
+				{"slot": 0, "label": "覆盖主武器", "enabled": true},
+				{"slot": 1, "label": "覆盖副武器", "enabled": true},
+			]
+		for entry in slots:
+			var slot: int = int(entry.get("slot", -1))
+			if slot not in [0, 1]:
+				continue
+			var label_text: String = str(entry.get("label", "覆盖主武器" if slot == 0 else "覆盖副武器"))
+			buttons.add_child(_make_button(label_text, item_id, slot, bool(entry.get("enabled", true))))
 		row.add_child(buttons)
 	else:
-		row.add_child(_make_button("购买", item_id, -1))
+		row.add_child(_make_button("购买", item_id, -1, bool(item.get("enabled", true))))
 	return row
 
 
-func _make_button(text: String, item_id: StringName, slot: int) -> Button:
+func _slot_enabled(item: Dictionary, slot: int) -> bool:
+	var slots: Array = item.get("slots", [])
+	if slots.is_empty():
+		return true
+	for entry in slots:
+		if int(entry.get("slot", -1)) == slot:
+			return bool(entry.get("enabled", true))
+	return false
+
+
+func _make_button(text: String, item_id: StringName, slot: int, enabled: bool) -> Button:
 	var button := Button.new()
 	button.text = text
+	button.disabled = not enabled
 	button.pressed.connect(_request_purchase.bind(item_id, slot))
 	return button
 

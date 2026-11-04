@@ -10,6 +10,7 @@ const SMG := preload("res://resources/weapons/test_smg.tres")
 const MELEE := preload("res://resources/weapons/enemy_test_melee.tres")
 
 const WATCHDOG_SECONDS := 40.0
+const EXPECTED_CHECKS := 27
 
 var failures := 0
 var checks_run := 0
@@ -219,6 +220,9 @@ func _finish() -> void:
 	paused = false
 	if is_instance_valid(current_scene):
 		current_scene.queue_free()
+	if checks_run != EXPECTED_CHECKS:
+		failures += 1
+		push_error("check count: expected %d, got %d" % [EXPECTED_CHECKS, checks_run])
 	if failures == 0:
 		print("shop weapon checks: all passed")
 	else:

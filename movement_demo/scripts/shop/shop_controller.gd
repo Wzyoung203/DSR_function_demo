@@ -56,13 +56,15 @@ func open_shop_for_player(player: Node3D) -> bool:
 		push_warning("ShopController: shop board is missing or incomplete")
 		return false
 	var items := _collect_visible_items()
-	if items.is_empty():
-		push_warning("ShopController: no visible shop items")
-		return false
-	if not shop_board.configure(_view_rows(items), int(state.money)):
+	_visible_items = items
+	if not shop_board.configure(_view_rows(items, state, player), int(state.money)):
 		push_warning("ShopController: board rejected the item configuration")
 		return false
-	_visible_items = items
+	shop_board.show_board()
+	if items.is_empty():
+		_open = true
+		_watch_player_health(player)
+		return true
 	var token := 0
 	if _pauses != null:
 		token = _pauses.acquire(self, &"shop", true)
@@ -71,7 +73,6 @@ func open_shop_for_player(player: Node3D) -> bool:
 		return false
 	_pause_token = token
 	_open = true
-	shop_board.show_board()
 	_watch_player_health(player)
 	return true
 
@@ -100,12 +101,14 @@ func purchase(item_id: StringName, slot: int) -> bool:
 		return false
 	if not _validate_effect(state, player, item, slot):
 		return false
-	if not _apply_effect(state, player, item, slot):
-		return false
 	if item.price > 0:
 		if not state.spend_money(item.price):
 			push_error("ShopController: spend failed after validation")
 			return false
+	if not _apply_effect(state, player, item, slot):
+		if item.price > 0:
+			state.add_money(item.price)
+		return false
 	if item.one_time:
 		state.mark_shop_item_purchased(item.id)
 	_refresh_board()
@@ -139,17 +142,31 @@ func _find_item(item_id: StringName) -> ShopItemDefinition:
 	return shop_catalog.item_by_id(item_id)
 
 
-func _view_rows(items: Array[ShopItemDefinition]) -> Array:
+func _view_rows(items: Array[ShopItemDefinition], state: Node, player: Node3D) -> Array:
 	var rows: Array = []
 	for item in items:
-		rows.append({
+		var row := {
 			"id": item.id,
 			"name": item.display_name,
 			"description": item.description,
 			"price": item.price,
 			"weapon": item.effect == ShopItemDefinition.Effect.WEAPON,
-		})
+		}
+		if item.effect == ShopItemDefinition.Effect.WEAPON:
+			row["slots"] = [
+				{"slot": 0, "label": "覆盖主武器", "enabled": _can_purchase(item, 0, state, player)},
+				{"slot": 1, "label": "覆盖副武器", "enabled": _can_purchase(item, 1, state, player)},
+			]
+		else:
+			row["enabled"] = _can_purchase(item, -1, state, player)
+		rows.append(row)
 	return rows
+
+
+func _can_purchase(item: ShopItemDefinition, slot: int, state: Node, player: Node3D) -> bool:
+	if item == null or item.price > int(state.money):
+		return false
+	return _validate_effect(state, player, item, slot)
 
 
 func _validate_effect(state: Node, player: Node3D, item: ShopItemDefinition, slot: int) -> bool:
@@ -210,7 +227,7 @@ func _refresh_board() -> void:
 	var state := _resolve_state()
 	if state == null:
 		return
-	shop_board.configure(_view_rows(_visible_items), int(state.money))
+	shop_board.configure(_view_rows(_visible_items, state, _player()), int(state.money))
 
 
 func _on_purchase_requested(item_id: StringName, slot: int) -> void:

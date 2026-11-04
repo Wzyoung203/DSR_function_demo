@@ -13,6 +13,19 @@ const SHOTGUN := preload("res://resources/weapons/test_shotgun.tres")
 const SMG := preload("res://resources/weapons/test_smg.tres")
 
 const WATCHDOG_SECONDS := 50.0
+const EXPECTED_CHECKS := 92
+
+
+class FailingEffectController extends "res://scripts/shop/shop_controller.gd":
+	var fail_item: StringName = &""
+	var fail_once: bool = true
+
+	func _apply_effect(state: Node, player: Node3D, item: ShopItemDefinition, slot: int) -> bool:
+		if item.id == fail_item and fail_once:
+			fail_once = false
+			return false
+		return super._apply_effect(state, player, item, slot)
+
 
 var failures := 0
 var checks_run := 0
@@ -38,6 +51,8 @@ func _run() -> void:
 	await _check_zero_price_free_purchase()
 	await _check_full_ammo_rejection()
 	await _check_dead_player_rules()
+	await _check_empty_or_locked_catalog()
+	await _check_transaction_ordering()
 	await _check_edge_failures()
 	_finish()
 
@@ -56,6 +71,10 @@ func _check_real_shop_flow() -> void:
 	check(await _open_shop_via_e(ctx), "E interaction opens the shop and pauses")
 	check(ctx.board.item_count() == 3, "level 0 shows the three initial products")
 	check(ctx.board.balance_text() == "货币：500", "board shows current money")
+	check(not ctx.board.purchase_enabled(&"first_aid", -1), "controller disables first aid while health is full")
+	check(ctx.board.purchase_enabled(&"ammo", -1), "controller enables ammo while it is depleted")
+	check(ctx.board.purchase_enabled(&"system_progress", -1),
+		"controller marks system progress enabled before it reaches maximum")
 
 	ctx.health.health = 20.0
 	ctx.health._update_display()
@@ -201,6 +220,7 @@ func _check_full_ammo_rejection() -> void:
 		check(ctx.equipment.can_refill_all_ammo(), "full ammo reports fully refilled")
 
 	check(ctx.controller.open_shop_for_player(ctx.player), "full ammo shop opens")
+	check(not ctx.board.purchase_enabled(&"ammo", -1), "controller disables ammo while already full")
 	var money_before: int = state.money
 	check(not ctx.controller.purchase(&"ammo", -1), "full ammo rejects ammo purchase")
 	check(state.money == money_before, "full ammo rejection does not charge")
@@ -237,6 +257,81 @@ func _check_dead_player_rules() -> void:
 	await _release(open_ctx.scene)
 
 
+func _check_empty_or_locked_catalog() -> void:
+	var ctx := await _prepare_main(false)
+	var money_before: int = ctx.state.money
+
+	var controller := ShopControllerScript.new()
+	controller.shop_catalog = ShopCatalogScript.new()
+	controller.shop_board_path = NodePath("../ShopBoard")
+	ctx.scene.add_child(controller)
+	await process_frame
+
+	check(controller.open_shop_for_player(ctx.player), "valid empty catalog opens the board")
+	check(ctx.board.visible, "empty catalog board is visible")
+	check(not ctx.tree.paused, "empty catalog does not acquire a pause token")
+	check(ctx.board.item_count() == 0, "empty catalog renders no rows")
+	check(str(ctx.board.result_label.text) == "暂无商品", "empty catalog shows the empty-catalog text")
+	check(int(ctx.state.money) == money_before, "empty catalog does not mutate money")
+	controller.close_shop()
+	check(not ctx.board.visible and not ctx.tree.paused,
+		"closing an empty shop is safe without a pause token")
+
+	var locked_catalog := ShopCatalogScript.new()
+	locked_catalog.items.append(_weapon_item(&"locked_weapon", SHOTGUN, 100, 5))
+	controller.shop_catalog = locked_catalog
+	ctx.state.completed_level = 0
+	await process_frame
+	check(controller.open_shop_for_player(ctx.player), "all-locked catalog opens the board")
+	check(ctx.board.item_count() == 0 and not ctx.tree.paused,
+		"all-locked catalog shows an empty, unpaused board")
+	controller.close_shop()
+	controller.queue_free()
+	await process_frame
+
+	await _release(ctx.scene)
+
+
+func _check_transaction_ordering() -> void:
+	var ctx := await _prepare_main(false)
+	var state: Node = ctx.state
+	state.money = 500
+	ctx.health.health = 10.0
+	ctx.health._update_display()
+
+	var catalog := ShopCatalogScript.new()
+	var failing_heal := ShopItemScript.new()
+	failing_heal.id = &"failing_heal"
+	failing_heal.display_name = "失败急救"
+	failing_heal.description = "应用阶段会失败，用于验证退款顺序"
+	failing_heal.price = 40
+	failing_heal.effect = ShopItemScript.Effect.HEAL
+	failing_heal.amount = 35
+	failing_heal.one_time = true
+	catalog.items.append(failing_heal)
+
+	var controller := FailingEffectController.new()
+	controller.shop_catalog = catalog
+	controller.shop_board_path = NodePath("../ShopBoard")
+	controller.fail_item = &"failing_heal"
+	ctx.scene.add_child(controller)
+	await process_frame
+
+	check(controller.open_shop_for_player(ctx.player), "failing-effect controller opens the shop")
+	var money_before: int = state.money
+	var health_before: float = ctx.health.health
+	check(not controller.purchase(&"failing_heal", -1), "unexpected effect failure rejects the purchase")
+	check(state.money == money_before, "paid purchase refunds the exact amount after an unexpected failure")
+	check(is_equal_approx(ctx.health.health, health_before), "failed purchase does not mutate player health")
+	check(not state.has_purchased_shop_item(&"failing_heal"),
+		"failed one-time purchase is not marked purchased")
+
+	controller.close_shop()
+	controller.queue_free()
+	await process_frame
+	await _release(ctx.scene)
+
+
 func _check_edge_failures() -> void:
 	var ctx := await _prepare_main()
 	var money_before: int = ctx.state.money
@@ -264,16 +359,6 @@ func _check_edge_failures() -> void:
 		"missing catalog does not pause or mutate")
 	missing_catalog.queue_free()
 	await process_frame
-
-	var empty_catalog := ShopControllerScript.new()
-	empty_catalog.shop_catalog = ShopCatalogScript.new()
-	empty_catalog.shop_board_path = NodePath("../ShopBoard")
-	ctx.scene.add_child(empty_catalog)
-	await process_frame
-	check(not empty_catalog.open_shop_for_player(ctx.player), "empty catalog is rejected")
-	check(not ctx.tree.paused and ctx.state.money == money_before,
-		"empty catalog does not pause or mutate")
-	empty_catalog.queue_free()
 
 	await _release(ctx.scene)
 
@@ -400,6 +485,9 @@ func _finish() -> void:
 	if is_instance_valid(current_scene):
 		current_scene.get_tree().paused = false
 		current_scene.queue_free()
+	if checks_run != EXPECTED_CHECKS:
+		failures += 1
+		push_error("check count: expected %d, got %d" % [EXPECTED_CHECKS, checks_run])
 	if failures == 0:
 		print("shop flow checks: all passed")
 	else:
