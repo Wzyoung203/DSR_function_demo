@@ -10,6 +10,8 @@ const Trigger = preload("res://scripts/systems/scene_event_trigger.gd")
 const Filter = preload("res://scripts/systems/scene_event_filter.gd")
 const Presentation = preload("res://scripts/systems/presentation_camera.gd")
 const HealthScene = preload("res://scenes/player/player_health.tscn")
+const SHOTGUN := preload("res://resources/weapons/test_shotgun.tres")
+const RIFLE := preload("res://resources/weapons/test_rifle.tres")
 
 var checks := 0
 var failures := 0
@@ -294,15 +296,34 @@ func _test_return_to_tavern_from_death() -> void:
 	var f := _fixture([], null, {"level_flow": flow})
 	await _ready_fixture(f)
 	var game_state := root.get_node("GameState")
+	var level_entry_paid: Dictionary = {
+		"equipment": {
+			"primary_weapon": SHOTGUN,
+			"active_slot": 0,
+		},
+	}
+	var checkpoint_snapshot: Dictionary = {
+		"equipment": {
+			"primary_weapon": RIFLE,
+			"active_slot": 1,
+		},
+		"health": {"health": 73.0},
+	}
 	game_state.completed_level = 2
 	game_state.available_level = 2
-	game_state.claimed_reward_levels = {}
+	game_state.money = 100
+	game_state.rewarded_task_ids = {&"task_a": true}
+	game_state.purchased_shop_item_ids = {}
 	game_state.system_progress = 20
-	game_state.record_campaign_checkpoint(2, {"health": {"health": 73.0}})
+	game_state.level_entry_player_state = level_entry_paid.duplicate(true)
+	game_state.record_campaign_checkpoint(2, checkpoint_snapshot)
 	game_state.completed_level = 3
 	game_state.available_level = 4
-	game_state.mark_reward_claimed(2)
+	game_state.money = 35
+	game_state.rewarded_task_ids = {&"task_a": true, &"task_level_2": true}
+	game_state.purchased_shop_item_ids = {&"shop_shotgun": true}
 	game_state.system_progress = 40
+	game_state.pending_player_state = {}
 
 	var calls: Array[Dictionary] = []
 	f.director.scene_loader = func(path: String, reload: bool) -> Error:
@@ -316,8 +337,10 @@ func _test_return_to_tavern_from_death() -> void:
 	check(calls.size() == 1 and calls[0].path == flow.next_scene_path() and not calls[0].reload,
 		"Death offers one non-reload transition to the level adapter's tavern path")
 	check(game_state.completed_level == 2 and game_state.available_level == 2
-			and not game_state.has_claimed_reward(2)
-			and game_state.pending_player_state == {"health": {"health": 73.0}},
+			and game_state.money == 100
+			and game_state.rewarded_task_ids == {&"task_a": true}
+			and game_state.purchased_shop_item_ids.is_empty()
+			and game_state.pending_player_state == checkpoint_snapshot,
 		"Hotel return restores the last completion checkpoint before loading")
 	check(f.director.state == &"dead" and paused and f.view.errors == 1,
 		"Failed hotel return keeps death pause and reports a retryable load error")
@@ -327,14 +350,21 @@ func _test_return_to_tavern_from_death() -> void:
 	check(calls.size() == 2 and calls[1].path.is_empty() and calls[1].reload,
 		"After a failed hotel load, current-level retry uses a normal reload")
 	check(game_state.completed_level == 3 and game_state.available_level == 4
-			and game_state.has_claimed_reward(2) and game_state.system_progress == 40
-			and game_state.pending_player_state.is_empty(),
+			and game_state.money == 35
+			and game_state.rewarded_task_ids == {&"task_a": true, &"task_level_2": true}
+			and game_state.purchased_shop_item_ids == {&"shop_shotgun": true}
+			and game_state.system_progress == 40,
 		"Current-level retry after hotel failure rolls non-transactional checkpoint state back")
+	check(game_state.pending_player_state == level_entry_paid,
+		"Current-level retry after hotel failure stages the level-entry paid weapon snapshot")
 	game_state.completed_level = 0
 	game_state.available_level = 1
-	game_state.claimed_reward_levels = {}
+	game_state.money = 0
+	game_state.rewarded_task_ids = {}
+	game_state.purchased_shop_item_ids = {}
 	game_state.system_progress = 0
 	game_state.pending_player_state = {}
+	game_state.level_entry_player_state = {}
 	game_state.campaign_checkpoint = {}
 	await _dispose(f)
 
