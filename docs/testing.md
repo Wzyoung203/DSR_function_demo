@@ -4,6 +4,24 @@
 
 ## 当前五关定向记录
 
+2026-11-04 货币商店、任务金额与检查点退款：蓝色商店 NPC 取代三选一。定向专项均以退出码 0 通过——
+`shop_catalog_test` 28 项（初始三商品、顺序、按 ID 查询、重复 ID 过滤与武器商品校验）、
+`shop_state_test` 42 项（货币增减、一次性任务发奖、检查点退款／一次性购买回滚／入关快照）、
+`shop_weapon_test` 27 项（`replace_weapon_slot` 校验、主副槽覆盖与当前关重试保留已购枪）、
+`shop_board_test` 18 项（面板隐藏、ALWAYS、行渲染与购买意图回传）、
+`shop_flow_test` 76 项（真实酒馆打开商店、三初始商品购买、武器解锁与一次性隐藏、余额不足、暂停所有权、死亡关闭与边界拒绝）、
+`quest_money_reward_test` 9 项（主线各 100、支线 0、只发一次）。
+流程专项 `campaign_flow_test` 98 项、`campaign_checkpoint_test` 17/17、`scene_director_test` 150/150、
+`level_flow_test` 87/87 全部通过；兼容专项 `reward_board_test` 14/14、`campaign_quest_task_test` 32 项通过。
+`run_regressions.py --check` 为 `Catalog OK`，`git diff --check` 无输出。
+
+本轮已知基线诊断（均不影响上述退出码）：macOS 每次启动都报告
+`get_system_ca_certificates` 的 `Condition "ret != noErr"`；加载保存关卡时出现既有 `ext_resource, invalid UID`
+回退到文本路径的警告（`camera_occlusion_demo.tscn`、`enemy/cooperation/intel_only.tres`、
+`weapons/enemy_test_melee.tres`）；`shop_catalog_test` 在故意制造重复 ID 时输出一次预期诊断。旧逐关奖励验收测试
+`reward_npc_test`、`quest_encounter_loop_test`、`reward_per_level_test`、`encounter_controller_edge_test`
+已退役，不再计入 systems 清单；不据此宣称完整 systems 组全绿。
+
 2026-11-04 二选一重生与酒店检查点：新增 `campaign_checkpoint_test` 9/9，验证最近完成关卡的系统进度和奖励领取记录回退、更早奖励保留，以及完成时玩家快照恢复。`campaign_flow_test` 扩至67/67，使用真实主场景、奖励 NPC/三选一面板和关卡验证“领取第1关系统进度奖励 → 解锁并进入第2关 → 死亡 → 返回酒店”后重新开放第1关三选一、锁回下一关入口并恢复完成时玩家状态；另一条真实流程验证首关未完成时死亡返回酒店仍保留任务接取且可重新进入第1关。`scene_director_test` 扩至149/149，覆盖真实死亡界面的两个按钮、无 LevelFlow 条件、酒店路径、事务式检查点恢复、错误提示与加载失败后切换回当前关重开。直接专项 `level_flow_test` 87/87、`player_health_test` 30/30、`weapon_slots_test` 35/35 通过，`reward_npc_test`、`reward_per_level_test`、`quest_encounter_loop_test` 亦通过；`run_regressions.py --check` 为 `Catalog OK`。本轮仍出现 macOS root certificate store 诊断和既有资源 UID 回退警告，直接专项进程均以0退出；不把该诊断记为干净输出，也不宣称统一系统组全绿。
 
 2026-11-02 五关任务链、逐关奖励与 Debug 一键通关：新增 `campaign_quest_task_test` 22/22，验证任务面板五条主线、A 解锁后的进行中状态和返程后的完成状态。新增 `reward_per_level_test` 39/39，验证第1～5关分别开放一次三选一、领取状态互不影响，以及每关独立标题、说明和数值配置。`debug_complete_level_test` 现为10/10，验证按钮受 Debug 总开关控制、只完成当前关、重复点击不重复发信号、开放返程门、保持可操作且不直接切场景。`quest_conditions_test` 扩至 19/19，覆盖整数状态字段下限条件。
@@ -68,8 +86,9 @@ python movement_demo/tests/run_combat_regressions.py --godot E:/Godot/Godot_v4.7
 | 场景调度与编辑器接线 | `scene_director_test`、`scene_event_node_test`、`enemy_wave_events_test`；无Wave/无Guide、暂停拥有者、事件过滤/失效、两个死亡按钮、加载失败重试 |
 | 增援与独立演出 | `scene_reinforcement_test`、`presentation_camera_test`；真实生成屏障、手动Marker3D、取消/返回；相机专项另有真实渲染模式 |
 | 任务与交互 | systems 中条件、任务、阶段、面板、唱片机与交互专项 |
+| 货币商店与任务金额 | `shop_catalog_test`、`shop_state_test`、`shop_weapon_test`、`shop_board_test`、`shop_flow_test`、`quest_money_reward_test` |
 | UI、检查器、美术 | 对应编辑器／渲染入口，不能只用 headless 代替 |
-| `systems` | 移动、奔跑、NPC 交互、听觉、声音模式、Debug、表现接口／复位、对话文件扫描，以及任务条件、五关任务链、阶段接线、任务面板、唱片机支线、五关酒馆往返、跨关玩家状态、逐关奖励配置、Debug 一键通关、竞技场清场、奖励板和酒馆奖励 NPC；由统一入口登记 |
+| `systems` | 移动、奔跑、NPC 交互、听觉、声音模式、Debug、表现接口／复位、对话文件扫描，以及任务条件、五关任务链、阶段接线、任务面板、唱片机支线、五关酒馆往返、跨关玩家状态、货币商店（目录／状态／武器／面板／流程）、任务金额、Debug 一键通关、奖励板兼容；由统一入口登记 |
 | `combat` | `tests/run_combat_regressions.py` 的原玩家战斗清单 |
 | `enemy` | `tests/enemy/run_enemy_regressions.py` 的原敌人清单 |
 
