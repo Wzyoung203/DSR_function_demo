@@ -7,7 +7,7 @@ const MAIN_SCENE := preload("res://scenes/main.tscn")
 const QuestControllerScript := preload("res://scripts/systems/stage/quest_controller.gd")
 
 const WATCHDOG_SECONDS := 30.0
-const EXPECTED_CHECKS := 22
+const EXPECTED_CHECKS := 29
 
 var failures := 0
 var checks_run := 0
@@ -42,6 +42,8 @@ func _run() -> void:
 	state.available_level = 1
 	state.task_a_returned = ""
 	state.task_a_reward_claimed = false
+	state.money = 0
+	state.rewarded_task_ids = {}
 	quests.reset_progress()
 	await process_frame
 	await process_frame
@@ -64,9 +66,16 @@ func _run() -> void:
 	state.completed_level = 1
 	await process_frame
 	check(quests.status_of(&"task_a") == QuestControllerScript.Status.COMPLETED, "完成第1关后第1关任务完成")
+	check(state.money == 100, "完成第1关后任务奖励 100")
 	check(controller.can_offer_reward(), "第1关返回后奖励仍可领取")
 	check(quests.status_of(&"task_level_2") == QuestControllerScript.Status.NOT_STARTED,
 		"仅完成第1关不会自动开始第2关任务")
+
+	state.completed_level = 0
+	await process_frame
+	state.completed_level = 1
+	await process_frame
+	check(state.money == 100, "重新评估第1关完成不重复发钱")
 
 	state.available_level = 2
 	await process_frame
@@ -77,6 +86,7 @@ func _run() -> void:
 	await process_frame
 	check(quests.status_of(&"task_level_2") == QuestControllerScript.Status.COMPLETED,
 		"完成第2关后第2关任务完成")
+	check(state.money == 200, "完成第2关后任务奖励累计到 200")
 	check(controller.can_offer_reward(), "完成第2关后可领取本关奖励")
 	check(not bool(state.task_a_reward_claimed), "第2关奖励资格不伪造第1关领取状态")
 
@@ -89,7 +99,9 @@ func _run() -> void:
 		await process_frame
 		check(quests.status_of(StringName("task_level_%d" % number)) == QuestControllerScript.Status.COMPLETED,
 			"完成第%d关后任务完成" % number)
+		check(state.money == number * 100, "完成第%d关后任务奖励累计到 %d" % [number, number * 100])
 	check(quests.status_of(&"task_level_5") == QuestControllerScript.Status.COMPLETED, "五关任务最终全部完成")
+	check(state.money == 500, "五关主线任务奖励合计 500")
 	check(controller.can_offer_reward(), "完成全部关卡后仍可领取第5关奖励")
 
 	if checks_run != EXPECTED_CHECKS:

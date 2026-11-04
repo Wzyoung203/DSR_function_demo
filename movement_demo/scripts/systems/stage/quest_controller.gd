@@ -126,6 +126,11 @@ func set_status(quest_id: StringName, status: int) -> void:
 		return
 	var previous := status_of(quest_id)
 	_statuses[quest_id] = status
+	if status == Status.COMPLETED:
+		var definition := quest_definition(quest_id)
+		if definition != null and definition.money_reward > 0 and _state != null \
+				and _state.has_method(&"claim_task_reward"):
+			_state.claim_task_reward(quest_id, definition.money_reward, definition.stage_index)
 	quest_changed.emit(quest_id, previous, status)
 
 
