@@ -73,6 +73,8 @@ var available_level: int = 1:
 		value_changed.emit(&"available_level", value)
 ## 下一次新玩家实例就绪后消费一次；正常进入关卡或返回酒馆时由传送门写入。
 var pending_player_state: Dictionary = {}
+## 最近一次正常完成关卡时的酒馆状态；死亡后选择回酒店时恢复，不随一次性玩家快照消费。
+var campaign_checkpoint: Dictionary = {}
 var completed_reward_claimed: bool:
 	get:
 		return has_claimed_reward(completed_level)
@@ -154,6 +156,58 @@ func take_pending_player_state() -> Dictionary:
 	var snapshot := pending_player_state
 	pending_player_state = {}
 	return snapshot
+
+
+## 返程门在完成任务后记录；快照保留奖励尚未领取、下一关尚未由 A 解锁的时刻。
+func record_campaign_checkpoint(level_number: int, player_snapshot: Dictionary) -> void:
+	campaign_checkpoint = {
+		"level": level_number,
+		"completed_level": completed_level,
+		"available_level": available_level,
+		"claimed_reward_levels": claimed_reward_levels.duplicate(),
+		"system_progress": system_progress,
+		"task_a_returned": task_a_returned,
+		"player_state": player_snapshot.duplicate(true),
+	}
+
+
+## 死亡后返回酒店沿用最近完成任务的状态；检查点不清空，加载失败后可再次重试。
+func restore_campaign_checkpoint() -> bool:
+	if campaign_checkpoint.is_empty():
+		return false
+	return restore_campaign_state(campaign_checkpoint)
+
+
+## 捕获当前酒店相关状态；场景加载失败时用于撤销尚未完成的检查点恢复。
+func capture_campaign_state() -> Dictionary:
+	return {
+		"completed_level": completed_level,
+		"available_level": available_level,
+		"claimed_reward_levels": claimed_reward_levels.duplicate(),
+		"system_progress": system_progress,
+		"task_a_returned": task_a_returned,
+		"player_state": pending_player_state.duplicate(true),
+	}
+
+
+func restore_campaign_state(snapshot: Dictionary) -> bool:
+	if snapshot.is_empty():
+		return false
+	completed_level = int(snapshot.get("completed_level", 0))
+	available_level = int(snapshot.get("available_level", available_level))
+	var restored_claims: Dictionary = snapshot.get("claimed_reward_levels", {}).duplicate()
+	claimed_reward_levels = restored_claims
+	task_a_reward_claimed = bool(restored_claims.get(1, false))
+	value_changed.emit(&"claimed_reward_levels", restored_claims.duplicate())
+	var restored_progress := int(snapshot.get("system_progress", system_progress))
+	if system_progress != restored_progress:
+		var previous := system_progress
+		system_progress = restored_progress
+		system_progress_changed.emit(previous, system_progress)
+	task_a_returned = str(snapshot.get("task_a_returned", ""))
+	var player_snapshot: Dictionary = snapshot.get("player_state", {})
+	pending_player_state = player_snapshot.duplicate(true)
+	return true
 
 
 func has_claimed_reward(level_number: int) -> bool:

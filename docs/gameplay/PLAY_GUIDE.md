@@ -43,7 +43,7 @@
 
 当携带弹药严格少于对应半匣、该弹种允许掉落且本区还有名额时，击杀敌人可得到最缺弹种的一包补给。靠近自动拾取到备弹，仍需 R 装填；每区地面最多两包，拾取后允许后续击杀再次掉落。具体武器、生命和医疗包数以各关保存配置及游戏界面为准。
 
-## 过关与重开
+## 过关与重生
 
 五关都使用同一条闭环：清空全部波次后不弹“进入下一关”面板、不暂停游戏，出生点附近出现橙色返回传送门；按 **E** 回酒馆。回酒馆后门口传送门先保持锁定，必须再次与 A 交互，A 才会解锁下一关。随后走到门口按 **E** 进入下一关。第1关返回时还会写入任务 A 的交差字段，酒馆任务面板显示“已完成”；第5关返回后与 A 交互会显示五关完成，不再解锁新关卡。
 
@@ -53,11 +53,13 @@
 
 每关返回后都能找蓝色“结算奖励”NPC 领取本关三选一。五关各自记录领取状态：第1关领过不会关闭第2关，第2关领过不会影响第3～5关；同一关只能领取一次。每关按钮标题、说明、效果类型和数值都在奖励配置资源中独立调整，见[关卡奖励配置](REWARDS.md)。
 
-死亡保持现有规则：不经过酒馆，原按钮只重开当前关；重开按该关保存的初始生命、武器、弹匣、备弹和医疗包恢复。只有正常清场并经返回传送门离开时，才生成下一场景使用的一次性跨关状态。若刷新点被玩家占用，需先让开，等后续波次出场并清空后才会出现返程门。原 `scenes/main.tscn` 保留为功能演示，仍可单独 F6 运行。
+死亡后暂停游戏并提供两个选项。**重新挑战当前关卡**按该关保存的初始生命、武器、弹匣、备弹和医疗包恢复；**返回酒店**读取最近一次正常完成关卡并返程时的检查点，恢复当时生命、当前槽位、双武器、弹匣、共享备弹、医疗包、系统进度和奖励领取记录，然后加载酒馆。检查点是任务刚完成、还没有领取本关三选一、也还没有与 A 交互解锁下一关的时刻；更早关卡的领取记录保留。第1关尚未完成时没有完成检查点，返回酒店会落到当前任务已接取、第1关可进入的初始酒馆状态。
+
+只有正常清场并经返回传送门离开时，才会更新酒店检查点和下一场景使用的一次性跨关状态。若刷新点被玩家占用，需先让开，等后续波次出场并清空后才会出现返程门。原 `scenes/main.tscn` 保留为功能演示，仍可单独 F6 运行。
 
 ## 界面与维护入口
 
-五关各自有一个 `LevelFlow` 实例（`scenes/ui/level_flow.tscn`），`level_number` 为1至5，并在 `return_portal_path` 指向本关 `TavernReturnPortal`。`scripts/systems/level_flow.gd` 接收 `SceneDirector.encounter_completed`，转交总调度完成生命周期，并在有返程门时只启用返程门、不暂停切场景。`QuestPortal` 读取 `GameState.available_level` 动态更新目标；`TavernReturnPortal` 写入 `completed_level`，并由 `PlayerCampaignState` 保存/恢复跨关玩家状态。敌人、AI、波次完成判定与 Health 的死亡重开职责保持不变。
+五关各自有一个 `LevelFlow` 实例（`scenes/ui/level_flow.tscn`），`level_number` 为1至5，并在 `return_portal_path` 指向本关 `TavernReturnPortal`。`scripts/systems/level_flow.gd` 接收 `SceneDirector.encounter_completed`，转交总调度完成生命周期，并在有返程门时只启用返程门、不暂停切场景。`QuestPortal` 读取 `GameState.available_level` 动态更新目标；`TavernReturnPortal` 写入 `completed_level`、一次性玩家快照和酒店检查点，由 `PlayerCampaignState` 保存/恢复跨关玩家状态。敌人、AI、波次完成判定与 Health 的死亡通知职责保持不变；死亡按钮意图由 SceneDirector 处理。
 
 Debug 总开关开启后，右上角 Debug 栏出现可用的 **一键通关当前关** 按钮。它调用当前关卡 `SceneDirector.debug_complete_encounter()`，清理当前与尚未生成的波次并发出原 `encounter_completed`，因此仍只开放返程门，不直接跳关或跳过酒馆流程。重复点击不会重复完成。
 

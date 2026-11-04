@@ -137,7 +137,8 @@
 
 1. 任意关卡清空后，`LevelFlow` 只启用本关 `TavernReturnPortal`，不显示按钮切关，也不暂停。
 2. 返程门把本关编号写入 `GameState.completed_level`，并用 `PlayerCampaignState.capture()`
-   保存一次待恢复状态；第1关同时写入 `task_a_returned = returned`。
+   保存一次待恢复状态；第1关同时写入 `task_a_returned = returned`。同一快照还会写入
+   `GameState.campaign_checkpoint`，连同当前 `available_level`、系统进度和奖励领取记录保存为酒店检查点。
 3. 新玩家实例在 `player.gd::_ready()` 中消费一次 `pending_player_state`。因此回酒馆时，
    同一个角色逻辑上的生命、当前槽位、双武器、各自弹匣、共享备弹和医疗包会出现在新 Player 节点上；
    瞄准、换弹进度、受击减速、体力和蹲姿等临时过程不跨场景。
@@ -147,8 +148,16 @@
    快照被新玩家实例消费后立即清空。
 6. 第5关完成后 `completed_level == available_level == 5`，A 显示五关完成，不再提供下一关。
 
-死亡不写入跨关快照，仍由 `PlayerHealth` 重开当前关；重开场景按该关保存配置恢复生命、武器、弹药和医疗包，
-不会把上一个场景残留的快照再次带入。正常跨关和死亡重开因此使用不同状态来源。
+死亡不写入跨关快照。`PlayerHealth` 只报告死亡，`SceneDirector` 提供两种重生：
+
+- **重新挑战当前关卡**：重载当前场景，按该关保存配置恢复生命、武器、弹药和医疗包，不消费完成检查点。
+- **返回酒店**：调用 `GameState.restore_campaign_checkpoint()`，恢复最近完成关卡时的
+  `completed_level`、`available_level`、系统进度、奖励领取记录和玩家快照，再加载酒馆。
+
+检查点固定在任务完成并返程、尚未领取本关三选一、尚未由 A 解锁下一关的时刻。因此返回酒店后，
+最近完成关卡重新变为未领取，更早关卡的领取记录保留；该关奖励造成的治疗、补弹或系统进度也随
+玩家快照与 `system_progress` 一并回退。第1关尚未完成时没有检查点，返回酒店会保留当前任务接取状态，
+以酒馆初始关卡状态重新加载。正常跨关、重新挑战和返回酒店使用不同状态来源。
 
 主线任务表现在有五关条目：
 
@@ -263,7 +272,8 @@
 对应条件、任务状态、阶段接线、面板和交互支线测试列于[测试说明](../testing.md)。本地五关新增记录包括：
 
 - `campaign_quest_task_test`：五条关卡任务随 A 解锁与通关更新、任务面板名称，以及各关奖励资格互相独立。
-- `campaign_flow_test`：五关返程门、A 逐关解锁、动态传送门、跨关生命／双武器／弹匣／备弹／医疗包，以及死亡重开不消费跨关快照。
+- `campaign_checkpoint_test`：酒店检查点保留更早奖励、回退最近奖励与系统进度，并搬运完成时玩家快照。
+- `campaign_flow_test`：五关返程门、A 逐关解锁、动态传送门、跨关状态，以及领取第1关奖励并进入第2关后死亡，返回酒店重新开放第1关三选一。
 - `reward_per_level_test`：第1～5关均可领取一次、领取状态互不影响，以及自定义标题、说明与数值。
 - `debug_complete_level_test`：Debug 总开关、一键完成当前关、单次完成信号和返程门流程。
 

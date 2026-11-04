@@ -2,9 +2,9 @@
 
 本页说明当前目录、场景与代码归属。功能和常用接口见[项目总览](../README.md)，专项用法见[文档导航](README.md)。路径以 `movement_demo/` 为根；现有节点路径、资源引用和脚本 UID 是复用边界，文档整理不迁移它们。
 
-当前合并基线同时保留本地五关任务／奖励与 upstream 场景调度结构。`LevelFlow` 在清场后只启用本关 `TavernReturnPortal`；返程门写入 `completed_level` 与一次性玩家快照并返回酒馆，A 更新 `available_level` 后门口 `QuestPortal` 才指向下一关。结果按钮和自动加载是 SceneDirector 的可复用能力，当前五关实际没有使用“清场后自动进入下一关”。
+当前合并基线同时保留本地五关任务／奖励与 upstream 场景调度结构。`LevelFlow` 在清场后只启用本关 `TavernReturnPortal`；返程门写入 `completed_level`、一次性玩家快照和酒店检查点并返回酒馆，A 更新 `available_level` 后门口 `QuestPortal` 才指向下一关。结果按钮和自动加载是 SceneDirector 的可复用能力，当前五关实际没有使用“清场后自动进入下一关”。
 
-五关任务和奖励分别由 `resources/stages/stage_table_template.tres`、`resources/rewards/level_rewards.tres` 保存；`QuestCondition.int_at_least()` 提供整数下限条件，`GameState.claimed_reward_levels` 按关记录一次领取，`RewardBoard` 只回传奖励选择。跨关快照由 `player_campaign_state.gd` 搬运，死亡重开不消费旧关快照。
+五关任务和奖励分别由 `resources/stages/stage_table_template.tres`、`resources/rewards/level_rewards.tres` 保存；`QuestCondition.int_at_least()` 提供整数下限条件，`GameState.claimed_reward_levels` 按关记录一次领取，`RewardBoard` 只回传奖励选择。跨关快照由 `player_campaign_state.gd` 搬运；死亡重开不消费旧关快照，选择回酒店则由 `GameState.campaign_checkpoint` 恢复最近完成关卡时的进度、奖励资格和玩家状态。
 
 敌人、武器、弹药、爆头、波次、相机与表现模块的具体职责见后文和对应专项；逐阶段实施过程保存在[历史记录](history/2026-10-28/project-layout.md)，不作为当前接口说明。
 
@@ -34,7 +34,7 @@ movement_demo/
 │   ├── rewards/           关卡、选项与奖励表资源脚本
 │   ├── world/             掩体、训练靶、区域、门、NPC、交互物与屏障
 │   │   ├── quest_portal.gd       按任务与 A 解锁进度进入对应关卡
-│   │   ├── tavern_return_portal.gd 记录关卡完成与玩家快照并返回酒馆
+│   │   ├── tavern_return_portal.gd 记录关卡完成、玩家快照与酒店检查点并返回酒馆
 │   │   └── interactions/  交互效果基类、注入上下文与各效果实现
 │   ├── ui/                对话、锁定准星、任务／奖励、关卡流程与游玩说明
 │   ├── debug/             调试开关、协调器路径；声音圈及旧攻击区域预览默认关闭
@@ -76,7 +76,7 @@ movement_demo/
 
 阶段、任务与 NPC 状态规则集中在 `scripts/systems/stage/`：阶段判定、任务状态与状态解析各一个控制器，配置表资源脚本与 `resources/stages/` 下的 `.tres` 配套维护。控制器挂在 `main.tscn`、按 group 互相查找，不新增全局单例；NPC 只按 `npc_id` 与接收接口被驱动，不反向依赖控制器。见 [阶段与任务](gameplay/STAGE_STATE.md)。
 
-正式场景切换统一经过 `scripts/systems/scene_transition.gd`。该入口在释放当前场景前，把 `World3D.environment` 与 `fallback_environment` 恢复为显式中性环境，避免 GL Compatibility 在目标场景没有 `WorldEnvironment` 时沿用上一场景的环境光。酒馆关卡门、五关返程门和死亡重开都使用这一入口；目标场景自身配置的 `WorldEnvironment` 仍可在加载后覆盖该中性回退。
+正式场景切换统一经过 `scripts/systems/scene_transition.gd`。该入口在释放当前场景前，把 `World3D.environment` 与 `fallback_environment` 恢复为显式中性环境，避免 GL Compatibility 在目标场景没有 `WorldEnvironment` 时沿用上一场景的环境光。酒馆关卡门、五关返程门、死亡重开和返回酒店都使用这一入口；目标场景自身配置的 `WorldEnvironment` 仍可在加载后覆盖该中性回退。
 
 `scripts/debug/coordinator_paths.gd` 保留 DebugSettings 入口，使用世界空间 Mesh 绘制 RTS 路线、箭头和站位，以及面积观察状态、责任预约和未来路线。每秒最多十次读取公开副本，不调用导航、规划或补写观察；成员颜色在死亡减员后保持稳定。当前 `main.tscn` 按用户确认保留任务面板、奖励面板及交互演示物；五关场景不挂载这套酒馆任务节点，交互组件仍可由 `tests/interaction_fixture.gd` 独立装配验证。五关清场后仍只开放返程门，回酒馆与 A 交互后才解锁下一关。
 

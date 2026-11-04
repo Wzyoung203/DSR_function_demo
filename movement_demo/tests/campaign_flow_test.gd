@@ -14,7 +14,7 @@ const LEVELS: Array[String] = [
 ]
 
 const WATCHDOG_SECONDS := 40.0
-const EXPECTED_CHECKS := 46
+const EXPECTED_CHECKS := 67
 
 var failures := 0
 var checks_run := 0
@@ -38,6 +38,7 @@ func _run() -> void:
 	create_timer(WATCHDOG_SECONDS, true, false, true).timeout.connect(_on_watchdog)
 	await _check_all_levels_expose_return_portal()
 	await _check_campaign_loop_and_player_state()
+	await _check_first_level_return_without_checkpoint()
 	await _check_final_tavern_dialogue()
 	if checks_run != EXPECTED_CHECKS:
 		failures += 1
@@ -158,6 +159,21 @@ func _check_campaign_loop_and_player_state() -> void:
 
 	portal = scene.get_node("Interactables/LevelPortal")
 	check(not portal.can_interact(player), "见 A 之前门口传送门保持锁定")
+	var reward_npc: Node3D = scene.get_node("RewardNPC")
+	var reward_board: CanvasLayer = scene.get_node("RewardBoard")
+	player.set_physics_process(false)
+	player.global_position = reward_npc.global_position + Vector3(0.0, 0.0, 0.9)
+	for _frame in range(6):
+		await physics_frame
+	_press_interact()
+	await process_frame
+	await process_frame
+	check(reward_board.visible and paused, "第1关回酒店后由奖励 NPC 打开三选一")
+	check(reward_board.select_reward(&"system_progress"), "第1关系统进度奖励可通过面板按钮选择")
+	await process_frame
+	check(state.has_claimed_reward(1) and state.system_progress == 20,
+		"第1关奖励实际结算并写入共享状态")
+	check(not reward_board.visible and not paused, "第1关奖励选择后关闭面板并恢复游戏")
 	await _open_a(scene, player)
 	check(scene.get_node("DialogueUI").dialogue_text.text.contains("第1关"), "A 告知上一关已完成")
 	await _pick(scene.get_node("DialogueUI"), "前往第2关")
@@ -182,15 +198,42 @@ func _check_campaign_loop_and_player_state() -> void:
 		"进入第2关继续保留武器、弹匣和医疗包")
 	check(state.pending_player_state.is_empty(), "待恢复状态只在进入场景时消费一次")
 
+	health.health = 1.0
+	equipment._ammo_states[0].magazine_rounds = 0
+	equipment._ammo_states[1].magazine_rounds = 0
+	equipment.reserve_ammo[&"rifle"] = 0
+	equipment.reserve_ammo[&"pistol"] = 0
+	equipment.medkit_count = 0
 	health.receive_hit(health.max_health)
-	check(player.is_dead() and paused, "第2关死亡仍按现有规则暂停")
-	health.get_node("DeathScreen/Center/Panel/Content/Restart").pressed.emit()
-	scene = await _wait_for_scene(LEVELS[1])
-	check(scene != null, "死亡按钮只重开当前第2关")
+	check(player.is_dead() and paused, "第2关死亡暂停并提供重生选择")
+	var restart_button: Button = health.get_node("DeathScreen/Center/Panel/Content/Restart")
+	var hotel_button: Button = health.get_node("DeathScreen/Center/Panel/Content/ReturnToTavern")
+	check(restart_button.can_process() and hotel_button.can_process(),
+		"死亡界面同时提供重新挑战和返回酒店")
+	hotel_button.pressed.emit()
+	scene = await _wait_for_scene("res://scenes/main.tscn")
+	check(scene != null, "返回酒店加载酒馆")
 	if scene != null:
 		player = scene.get_node("Player")
 		health = player.get_node("Health")
-		check(is_equal_approx(health.health, health.max_health), "死亡重开恢复第2关保存的初始生命")
+		equipment = player.get_node("Equipment")
+		check(int(state.completed_level) == 1 and int(state.available_level) == 1,
+			"返回酒店回到第1关完成且 A 尚未解锁第2关的状态")
+		check(not state.has_claimed_reward(1) and state.system_progress == 0,
+			"返回酒店重新开放第1关三选一并撤销其系统进度奖励")
+		check(is_equal_approx(health.health, 73.0), "酒店恢复第1关完成时的生命")
+		check(equipment.active_slot == 1 and equipment._ammo_states[0].magazine_rounds == 3
+			and equipment._ammo_states[1].magazine_rounds == 5,
+			"酒店恢复第1关完成时的槽位和双武器弹匣")
+		check(equipment.reserve_ammo[&"rifle"] == 11 and equipment.reserve_ammo[&"pistol"] == 7
+			and equipment.reserve_ammo[&"smg"] == 9 and equipment.reserve_ammo[&"shotgun"] == 2
+			and equipment.medkit_count == 1,
+			"酒店恢复第1关完成时的共享备弹和医疗包")
+		check(state.pending_player_state.is_empty(), "酒店只消费一次完成时玩家快照")
+		check(scene.get_node("EncounterController").can_offer_reward(),
+			"回到酒店后第1关奖励 NPC 可再次提供三选一")
+		check(not scene.get_node("Interactables/LevelPortal").can_interact(player),
+			"回到酒店后仍须与 A 交互才能重新解锁第2关")
 	await _release(scene)
 
 
@@ -215,6 +258,62 @@ func _check_final_tavern_dialogue() -> void:
 	check(scene.get_node("DialogueUI").dialogue_text.text.contains("五关"), "A 在第5关后告知挑战完成")
 	check(scene.get_node("DialogueUI").choices.get_child_count() == 0, "第5关后 A 不再提供下一关选项")
 	scene.get_node("DialogueUI")._close_dialogue()
+	await _release(scene)
+
+
+func _check_first_level_return_without_checkpoint() -> void:
+	var scene: Node = MAIN_SCENE.instantiate()
+	root.add_child(scene)
+	current_scene = scene
+	await process_frame
+	await process_frame
+
+	var state := root.get_node("GameState")
+	var quests: Node = scene.get_node("QuestController")
+	state.help_choice = ""
+	state.task_a_returned = ""
+	state.completed_level = 0
+	state.available_level = 1
+	state.claimed_reward_levels = {}
+	state.system_progress = 0
+	state.pending_player_state = {}
+	state.campaign_checkpoint = {}
+	state.clear_interaction_state()
+	quests.reset_progress()
+	state.help_choice = "accepted"
+	await _wait_until(func() -> bool:
+		return quests.status_of(&"task_a") == QuestControllerScript.Status.IN_PROGRESS)
+
+	var player: CharacterBody3D = scene.get_node("Player")
+	var portal = scene.get_node("Interactables/LevelPortal")
+	check(portal.can_interact(player), "首关死亡前任务已接取且关卡入口可用")
+	check(portal.interact(player), "首关任务入口携带玩家状态进入第1关")
+	scene = await _wait_for_scene(LEVELS[0])
+	check(scene != null, "首关无完成检查点测试进入第1关")
+	if scene == null:
+		_finish()
+		return
+	await _close_level_guide(scene)
+	player = scene.get_node("Player")
+	var health = player.get_node("Health")
+	health.receive_hit(health.max_health)
+	check(player.is_dead() and paused, "首关未完成时死亡提供重生选择")
+	health.get_node("DeathScreen/Center/Panel/Content/ReturnToTavern").pressed.emit()
+	scene = await _wait_for_scene("res://scenes/main.tscn")
+	check(scene != null, "首关无检查点时仍可返回酒店")
+	if scene != null:
+		player = scene.get_node("Player")
+		portal = scene.get_node("Interactables/LevelPortal")
+		var returned_quests: Node = scene.get_node("QuestController")
+		check(int(state.completed_level) == 0 and int(state.available_level) == 1,
+			"首关返回酒店不伪造完成或下一关进度")
+		check(state.help_choice == "accepted"
+			and returned_quests.status_of(&"task_a") == QuestControllerScript.Status.IN_PROGRESS,
+			"首关返回酒店保留已接取任务")
+		check(state.campaign_checkpoint.is_empty() and state.pending_player_state.is_empty(),
+			"首关无检查点返回不会留下待消费玩家状态")
+		check(not player.is_dead() and portal.can_interact(player) and portal.display_name == "关卡1",
+			"首关返回酒店后玩家可重新进入第1关")
 	await _release(scene)
 
 
@@ -247,6 +346,15 @@ func _close_level_guide(scene: Node) -> void:
 		guide.get_node("Backdrop/Panel/Content/Close").pressed.emit()
 	await process_frame
 	await process_frame
+
+
+func _press_interact() -> void:
+	var event := InputEventKey.new()
+	event.keycode = KEY_E
+	event.physical_keycode = KEY_E
+	event.pressed = true
+	root.push_input(event)
+	Input.flush_buffered_events()
 
 
 func _wait_for_scene(path: String) -> Node:

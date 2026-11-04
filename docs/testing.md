@@ -4,6 +4,8 @@
 
 ## 当前五关定向记录
 
+2026-11-04 二选一重生与酒店检查点：新增 `campaign_checkpoint_test` 9/9，验证最近完成关卡的系统进度和奖励领取记录回退、更早奖励保留，以及完成时玩家快照恢复。`campaign_flow_test` 扩至67/67，使用真实主场景、奖励 NPC/三选一面板和关卡验证“领取第1关系统进度奖励 → 解锁并进入第2关 → 死亡 → 返回酒店”后重新开放第1关三选一、锁回下一关入口并恢复完成时玩家状态；另一条真实流程验证首关未完成时死亡返回酒店仍保留任务接取且可重新进入第1关。`scene_director_test` 扩至149/149，覆盖真实死亡界面的两个按钮、无 LevelFlow 条件、酒店路径、事务式检查点恢复、错误提示与加载失败后切换回当前关重开。直接专项 `level_flow_test` 87/87、`player_health_test` 30/30、`weapon_slots_test` 35/35 通过，`reward_npc_test`、`reward_per_level_test`、`quest_encounter_loop_test` 亦通过；`run_regressions.py --check` 为 `Catalog OK`。本轮仍出现 macOS root certificate store 诊断和既有资源 UID 回退警告，直接专项进程均以0退出；不把该诊断记为干净输出，也不宣称统一系统组全绿。
+
 2026-11-02 五关任务链、逐关奖励与 Debug 一键通关：新增 `campaign_quest_task_test` 22/22，验证任务面板五条主线、A 解锁后的进行中状态和返程后的完成状态。新增 `reward_per_level_test` 39/39，验证第1～5关分别开放一次三选一、领取状态互不影响，以及每关独立标题、说明和数值配置。`debug_complete_level_test` 现为10/10，验证按钮受 Debug 总开关控制、只完成当前关、重复点击不重复发信号、开放返程门、保持可操作且不直接切场景。`quest_conditions_test` 扩至 19/19，覆盖整数状态字段下限条件。
 
 2026-11-02 五关酒馆往返与跨关状态：`campaign_flow_test` 46/46，覆盖五关返程门、A 逐关解锁、门口动态目标和跨关生命/当前槽位/双武器/双弹匣/共享备弹/医疗包；死亡仍重开当前关并恢复该关配置。`level_flow_test` 现为87/87，使用五张真实保存地图和真实敌人死亡逐关清场，验证每关只开放返程门、返回酒馆、与 A 交互后再进入下一关，第5关结束后停在酒馆。`player_health_test` 30/30 与 `weapon_slots_test` 35/35 保持；旧波次卸载警告仍存在。
@@ -62,8 +64,8 @@ python movement_demo/tests/run_combat_regressions.py --godot E:/Godot/Godot_v4.7
 | 装备、弹药、装填 | 武器槽、玩家换弹／接续、霰弹装填、`ammo_drop_test` |
 | 生命与治疗 | `player_health_test`、`player_medkit_test`、`player_medkit_lifecycle_test` |
 | 相机与独立复用 | `player_camera_test`、`player_scene_reuse_test`、`camera_occlusion_test` |
-| 五关与波次 | `level_flow_test`、敌人波次专项；使用真实保存场景验证 |
-| 场景调度与编辑器接线 | `scene_director_test`、`scene_event_node_test`、`enemy_wave_events_test`；无Wave/无Guide、暂停拥有者、事件过滤/失效、加载失败重试 |
+| 五关、检查点与波次 | `campaign_checkpoint_test`、`campaign_flow_test`、`level_flow_test`、敌人波次专项；使用真实保存场景验证 |
+| 场景调度与编辑器接线 | `scene_director_test`、`scene_event_node_test`、`enemy_wave_events_test`；无Wave/无Guide、暂停拥有者、事件过滤/失效、两个死亡按钮、加载失败重试 |
 | 增援与独立演出 | `scene_reinforcement_test`、`presentation_camera_test`；真实生成屏障、手动Marker3D、取消/返回；相机专项另有真实渲染模式 |
 | 任务与交互 | systems 中条件、任务、阶段、面板、唱片机与交互专项 |
 | UI、检查器、美术 | 对应编辑器／渲染入口，不能只用 headless 代替 |
@@ -71,7 +73,7 @@ python movement_demo/tests/run_combat_regressions.py --godot E:/Godot/Godot_v4.7
 | `combat` | `tests/run_combat_regressions.py` 的原玩家战斗清单 |
 | `enemy` | `tests/enemy/run_enemy_regressions.py` 的原敌人清单 |
 
-酒馆传送门专项检查正式切换后的 `World3D` 中性回退环境；关卡流程专项使用真实五关逐波清敌，检查每关返程门、A 解锁、动态门口传送和死亡重开。当前五关仍使用返程门，不依赖按钮直接切关；SceneDirector 的加载能力由独立场景调度专项验证。
+酒馆传送门专项检查正式切换后的 `World3D` 中性回退环境；关卡流程专项使用真实五关逐波清敌，检查每关返程门、A 解锁、动态门口传送和当前关重开。检查点专项验证死亡回酒店会恢复最近完成任务时的进度、奖励资格与玩家状态。当前五关仍使用返程门，不依赖按钮直接切关；SceneDirector 的加载能力由独立场景调度专项验证。
 
 ## 特殊入口与会写入的维护工具
 
