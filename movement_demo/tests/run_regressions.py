@@ -21,7 +21,7 @@ SYSTEM_TESTS = [
     "quest_encounter_loop_test", "reward_npc_test", "reward_per_level_test", "reward_board_test",
     "campaign_checkpoint_test", "campaign_flow_test",
     "campaign_quest_task_test", "debug_complete_level_test", "combat_clear_signal_test",
-    "quest_portal_test",
+    "quest_portal_test", "shop_catalog_test",
 ]
 # The optional interaction prototype is absent from some local project baselines.
 if (DIRECTORY / "interactable_test.gd").is_file():
