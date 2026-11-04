@@ -16,6 +16,7 @@ var _pauses
 var _pause_token := 0
 var _open := false
 var _visible_items: Array[ShopItemDefinition] = []
+var _watched_health: Node
 
 
 func _ready() -> void:
@@ -31,6 +32,7 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	_open = false
+	_unwatch_player_health()
 	_release_pause()
 
 
@@ -38,6 +40,8 @@ func open_shop_for_player(player: Node3D) -> bool:
 	if _open:
 		return true
 	if player == null or not is_instance_valid(player) or not player.is_in_group(&"player"):
+		return false
+	if not _player_alive(player):
 		return false
 	var state := _resolve_state()
 	if state == null or shop_catalog == null:
@@ -68,6 +72,7 @@ func open_shop_for_player(player: Node3D) -> bool:
 	_pause_token = token
 	_open = true
 	shop_board.show_board()
+	_watch_player_health(player)
 	return true
 
 
@@ -77,6 +82,7 @@ func close_shop() -> void:
 	_open = false
 	if shop_board != null and shop_board.has_method(&"hide_board"):
 		shop_board.hide_board()
+	_unwatch_player_health()
 	_release_pause()
 
 
@@ -85,20 +91,21 @@ func purchase(item_id: StringName, slot: int) -> bool:
 		return false
 	var state := _resolve_state()
 	var player := _player()
-	if state == null or player == null:
+	if state == null or player == null or not _player_alive(player):
 		return false
 	var item := _find_item(item_id)
 	if item == null or not _is_visible(item):
 		return false
-	if int(state.money) < item.price:
+	if item.price > 0 and int(state.money) < item.price:
 		return false
 	if not _validate_effect(state, player, item, slot):
 		return false
 	if not _apply_effect(state, player, item, slot):
 		return false
-	if not state.spend_money(item.price):
-		push_error("ShopController: spend failed after validation")
-		return false
+	if item.price > 0:
+		if not state.spend_money(item.price):
+			push_error("ShopController: spend failed after validation")
+			return false
 	if item.one_time:
 		state.mark_shop_item_purchased(item.id)
 	_refresh_board()
@@ -153,7 +160,9 @@ func _validate_effect(state: Node, player: Node3D, item: ShopItemDefinition, slo
 				and float(health.health) < float(health.max_health)
 		ShopItemDefinition.Effect.REFILL_AMMO:
 			var equipment := _equipment(player)
-			return equipment != null and equipment.has_method(&"refill_all_ammo")
+			return equipment != null and equipment.has_method(&"refill_all_ammo") \
+				and equipment.has_method(&"can_refill_all_ammo") \
+				and not bool(equipment.can_refill_all_ammo())
 		ShopItemDefinition.Effect.SYSTEM_PROGRESS:
 			return state.has_method(&"add_system_progress") \
 				and int(state.system_progress) < int(state.SYSTEM_PROGRESS_MAX)
@@ -225,6 +234,37 @@ func _health(player: Node3D) -> Node:
 
 func _equipment(player: Node3D) -> Node:
 	return player.get_node_or_null("Equipment") if player != null else null
+
+
+func _player_alive(player: Node3D) -> bool:
+	if player == null or not is_instance_valid(player):
+		return false
+	if player.has_method(&"is_dead") and player.is_dead():
+		return false
+	var health := _health(player)
+	return health == null or not bool(health.get("is_dead"))
+
+
+func _watch_player_health(player: Node3D) -> void:
+	_unwatch_player_health()
+	var health := _health(player)
+	if health == null or not health.has_signal(&"died"):
+		return
+	_watched_health = health
+	if not health.died.is_connected(_on_player_died):
+		health.died.connect(_on_player_died)
+
+
+func _unwatch_player_health() -> void:
+	if _watched_health != null and is_instance_valid(_watched_health) \
+			and _watched_health.has_signal(&"died") \
+			and _watched_health.died.is_connected(_on_player_died):
+		_watched_health.died.disconnect(_on_player_died)
+	_watched_health = null
+
+
+func _on_player_died() -> void:
+	close_shop()
 
 
 func _release_pause() -> void:

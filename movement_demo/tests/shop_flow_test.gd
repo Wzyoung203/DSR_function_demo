@@ -35,6 +35,9 @@ func check(condition: bool, label_text: String) -> void:
 func _run() -> void:
 	create_timer(WATCHDOG_SECONDS, true, false, true).timeout.connect(_on_watchdog)
 	await _check_real_shop_flow()
+	await _check_zero_price_free_purchase()
+	await _check_full_ammo_rejection()
+	await _check_dead_player_rules()
 	await _check_edge_failures()
 	_finish()
 
@@ -158,6 +161,82 @@ func _check_real_shop_flow() -> void:
 	await _release(ctx.scene)
 
 
+func _check_zero_price_free_purchase() -> void:
+	var ctx := await _prepare_main(false)
+	var state: Node = ctx.state
+	state.money = 0
+	ctx.health.health = 10.0
+	ctx.health._update_display()
+
+	var catalog := ShopCatalogScript.new()
+	var free_heal := ShopItemScript.new()
+	free_heal.id = &"free_heal"
+	free_heal.display_name = "免费急救"
+	free_heal.description = "免费恢复 5 点生命"
+	free_heal.price = 0
+	free_heal.effect = ShopItemScript.Effect.HEAL
+	free_heal.amount = 5
+	catalog.items.append(free_heal)
+	catalog.items.append(_weapon_item(&"free_weapon", SHOTGUN, 0, 0))
+	ctx.controller.shop_catalog = catalog
+
+	check(ctx.controller.open_shop_for_player(ctx.player), "zero-price shop opens")
+	check(ctx.controller.purchase(&"free_heal", -1), "zero-price consumable succeeds")
+	check(is_equal_approx(ctx.health.health, 15.0) and state.money == 0,
+		"zero-price consumable applies without charging")
+	check(ctx.controller.purchase(&"free_weapon", 0), "zero-price weapon succeeds")
+	check(ctx.equipment.primary_weapon == SHOTGUN and state.money == 0,
+		"zero-price weapon replaces slot without charging")
+	check(state.has_purchased_shop_item(&"free_weapon"), "zero-price one-time weapon is recorded")
+
+	await _release(ctx.scene)
+
+
+func _check_full_ammo_rejection() -> void:
+	var ctx := await _prepare_main(false)
+	var state: Node = ctx.state
+	state.money = 500
+	check(ctx.equipment.has_method(&"can_refill_all_ammo"), "Equipment exposes can_refill_all_ammo")
+	if ctx.equipment.has_method(&"can_refill_all_ammo"):
+		check(ctx.equipment.can_refill_all_ammo(), "full ammo reports fully refilled")
+
+	check(ctx.controller.open_shop_for_player(ctx.player), "full ammo shop opens")
+	var money_before: int = state.money
+	check(not ctx.controller.purchase(&"ammo", -1), "full ammo rejects ammo purchase")
+	check(state.money == money_before, "full ammo rejection does not charge")
+
+	ctx.equipment.reserve_ammo[&"rifle"] = 0
+	if ctx.equipment.has_method(&"can_refill_all_ammo"):
+		check(not ctx.equipment.can_refill_all_ammo(), "partial ammo reports missing")
+	money_before = state.money
+	check(ctx.controller.purchase(&"ammo", -1), "partial ammo purchase succeeds")
+	check(state.money == money_before - 30 and ctx.equipment.reserve_ammo[&"rifle"] == ctx.equipment.starting_rifle_ammo,
+		"partial ammo purchase charges once and restores the missing type")
+
+	await _release(ctx.scene)
+
+
+func _check_dead_player_rules() -> void:
+	var dead_ctx := await _prepare_main(false)
+	dead_ctx.health.receive_hit(dead_ctx.health.max_health * 10.0)
+	await dead_ctx.tree.process_frame
+	await dead_ctx.tree.process_frame
+	check(dead_ctx.player.is_dead(), "player is dead before opening shop")
+	check(not dead_ctx.controller.open_shop_for_player(dead_ctx.player), "dead player cannot open shop")
+	check(not dead_ctx.board.visible, "dead player does not show the shop")
+	await _release(dead_ctx.scene)
+
+	var open_ctx := await _prepare_main(false)
+	check(open_ctx.controller.open_shop_for_player(open_ctx.player), "alive player opens shop")
+	check(open_ctx.board.visible and open_ctx.tree.paused, "alive shop is visible and paused")
+	open_ctx.health.receive_hit(open_ctx.health.max_health * 10.0)
+	await open_ctx.tree.process_frame
+	await open_ctx.tree.process_frame
+	check(not open_ctx.board.visible, "shop closes when the player dies")
+	check(open_ctx.tree.paused, "death pause remains after shop closes")
+	await _release(open_ctx.scene)
+
+
 func _check_edge_failures() -> void:
 	var ctx := await _prepare_main()
 	var money_before: int = ctx.state.money
@@ -199,7 +278,7 @@ func _check_edge_failures() -> void:
 	await _release(ctx.scene)
 
 
-func _prepare_main() -> Dictionary:
+func _prepare_main(deplete: bool = true) -> Dictionary:
 	var scene: Node = MAIN_SCENE.instantiate()
 	root.add_child(scene)
 	current_scene = scene
@@ -218,7 +297,10 @@ func _prepare_main() -> Dictionary:
 	state.purchased_shop_item_ids = {}
 	state.rewarded_task_ids = {}
 	state.clear_interaction_state()
-	_deplete_ammo(equipment)
+	if deplete:
+		_deplete_ammo(equipment)
+	else:
+		_ensure_ammo_states(equipment)
 	player.set_physics_process(false)
 	player.global_position = npc.global_position + Vector3(0.0, 0.0, 0.9)
 	for _frame in range(8):
@@ -267,6 +349,12 @@ func _deplete_ammo(equipment: Node) -> void:
 			ammo_state.is_reloading = true
 	for ammo_type in equipment.reserve_ammo.keys():
 		equipment.reserve_ammo[ammo_type] = 0
+
+
+func _ensure_ammo_states(equipment: Node) -> void:
+	if equipment.has_method(&"select_slot"):
+		equipment.select_slot(1)
+		equipment.select_slot(0)
 
 
 func _magazines_full(equipment: Node) -> bool:

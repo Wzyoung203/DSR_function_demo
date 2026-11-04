@@ -86,6 +86,25 @@ func refill_all_ammo() -> void:
 	_update_display()
 
 
+## 全部已装备弹匣满匣，且所有配置的初始共享备弹都不低于初始数量时为 true。
+## 商店用此查询在补满弹药商品当前没有实际效果时拒绝购买。
+func can_refill_all_ammo() -> bool:
+	for slot in range(2):
+		var data := _weapon_at(slot)
+		if data == null:
+			continue
+		var state = _ammo_states[slot]
+		if state == null or state.weapon != data or state.magazine_rounds < data.magazine_capacity or state.is_reloading:
+			return false
+	for supply in initial_ammo:
+		if supply == null or supply.ammo == null:
+			continue
+		var key := supply.ammo.ammo_id
+		if int(reserve_ammo.get(key, 0)) < int(supply.amount):
+			return false
+	return true
+
+
 func campaign_snapshot() -> Dictionary:
 	var magazines: Array[int] = [0, 0]
 	for slot in range(2):

@@ -160,7 +160,8 @@ func _check_campaign_loop_and_player_state() -> void:
 	portal = scene.get_node("Interactables/LevelPortal")
 	check(not portal.can_interact(player), "见 A 之前门口传送门保持锁定")
 	var reward_npc: Node3D = scene.get_node("RewardNPC")
-	var reward_board: CanvasLayer = scene.get_node("RewardBoard")
+	var shop_board: CanvasLayer = scene.get_node("ShopBoard")
+	var shop_controller: Node = scene.get_node("ShopController")
 	player.set_physics_process(false)
 	player.global_position = reward_npc.global_position + Vector3(0.0, 0.0, 0.9)
 	for _frame in range(6):
@@ -168,12 +169,15 @@ func _check_campaign_loop_and_player_state() -> void:
 	_press_interact()
 	await process_frame
 	await process_frame
-	check(reward_board.visible and paused, "第1关回酒店后由奖励 NPC 打开三选一")
-	check(reward_board.select_reward(&"system_progress"), "第1关系统进度奖励可通过面板按钮选择")
+	var money_after_task: int = int(state.money)
+	check(shop_board.visible and paused, "第1关回酒店后由蓝色NPC打开商店")
+	check(shop_controller.purchase(&"system_progress", -1), "第1关系统进度商品可购买")
 	await process_frame
-	check(state.has_claimed_reward(1) and state.system_progress == 20,
-		"第1关奖励实际结算并写入共享状态")
-	check(not reward_board.visible and not paused, "第1关奖励选择后关闭面板并恢复游戏")
+	check(int(state.money) == money_after_task - 50 and state.system_progress == 20,
+		"第1关系统进度商品实际扣款并结算")
+	shop_controller.close_shop()
+	await process_frame
+	check(not shop_board.visible and not paused, "第1关商店购买后关闭面板并恢复游戏")
 	await _open_a(scene, player)
 	check(scene.get_node("DialogueUI").dialogue_text.text.contains("第1关"), "A 告知上一关已完成")
 	await _pick(scene.get_node("DialogueUI"), "前往第2关")
@@ -219,8 +223,8 @@ func _check_campaign_loop_and_player_state() -> void:
 		equipment = player.get_node("Equipment")
 		check(int(state.completed_level) == 1 and int(state.available_level) == 1,
 			"返回酒店回到第1关完成且 A 尚未解锁第2关的状态")
-		check(not state.has_claimed_reward(1) and state.system_progress == 0,
-			"返回酒店重新开放第1关三选一并撤销其系统进度奖励")
+		check(state.system_progress == 0 and int(state.money) == 100,
+			"返回酒店恢复完成时系统进度与货币")
 		check(is_equal_approx(health.health, 73.0), "酒店恢复第1关完成时的生命")
 		check(equipment.active_slot == 1 and equipment._ammo_states[0].magazine_rounds == 3
 			and equipment._ammo_states[1].magazine_rounds == 5,
@@ -230,8 +234,8 @@ func _check_campaign_loop_and_player_state() -> void:
 			and equipment.medkit_count == 1,
 			"酒店恢复第1关完成时的共享备弹和医疗包")
 		check(state.pending_player_state.is_empty(), "酒店只消费一次完成时玩家快照")
-		check(scene.get_node("EncounterController").can_offer_reward(),
-			"回到酒店后第1关奖励 NPC 可再次提供三选一")
+		check(scene.get_node("ShopController") != null,
+			"回到酒店后商店入口仍可用")
 		check(not scene.get_node("Interactables/LevelPortal").can_interact(player),
 			"回到酒店后仍须与 A 交互才能重新解锁第2关")
 	await _release(scene)
