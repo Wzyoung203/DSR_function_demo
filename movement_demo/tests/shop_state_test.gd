@@ -5,7 +5,7 @@ extends SceneTree
 
 const GameStateScript := preload("res://scripts/systems/game_state.gd")
 
-const EXPECTED_CHECKS := 35
+const EXPECTED_CHECKS := 42
 
 var failures := 0
 var checks_run := 0
@@ -107,6 +107,31 @@ func _run() -> void:
 	state.pending_player_state = {}
 	check(not state.prepare_level_retry_state() and state.pending_player_state.is_empty(),
 		"prepare_level_retry_state fails when no level-entry snapshot exists")
+
+	var legacy: Node = GameStateScript.new()
+	root.add_child(legacy)
+	legacy.campaign_checkpoint = {
+		"level": 1,
+		"completed_level": 1,
+		"available_level": 1,
+		"claimed_reward_levels": {},
+		"system_progress": 0,
+		"task_a_returned": "returned",
+		"player_state": {"health": {"health": 50.0}},
+	}
+	check(legacy.restore_campaign_checkpoint(), "old checkpoint without new fields restores")
+	check(legacy.money == 0, "old checkpoint defaults money to zero")
+	check(legacy.rewarded_task_ids.is_empty() and legacy.purchased_shop_item_ids.is_empty(),
+		"old checkpoint defaults reward and purchase maps to empty")
+	check(legacy.claim_task_reward(&"task_legacy", 100, 1) and legacy.money == 100,
+		"task reward claims safely on an old checkpoint")
+	check(legacy.campaign_checkpoint.has("rewarded_task_ids"),
+		"old checkpoint gains a reward map after the matching claim")
+	check(int(legacy.campaign_checkpoint.get("money", -1)) == 100,
+		"old checkpoint money is synchronized after the matching claim")
+	check(not legacy.claim_task_reward(&"task_legacy", 100, 1) and legacy.money == 100,
+		"old-checkpoint task reward remains non-repeatable")
+	legacy.free()
 
 	_finish(state)
 

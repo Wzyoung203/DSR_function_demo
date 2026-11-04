@@ -183,13 +183,18 @@ func spend_money(amount: int) -> bool:
 func claim_task_reward(task_id: StringName, amount: int, completion_level: int) -> bool:
 	if amount <= 0 or task_id == &"" or has_task_reward(task_id):
 		return false
-	rewarded_task_ids[task_id] = true
-	money += amount
 	if not campaign_checkpoint.is_empty() \
 			and int(campaign_checkpoint.get("completed_level", -1)) == completion_level \
 			and not bool(campaign_checkpoint.get("rewarded_task_ids", {}).get(task_id, false)):
-		campaign_checkpoint["rewarded_task_ids"][task_id] = true
+		var checkpoint_rewards: Dictionary = {}
+		var raw_rewards = campaign_checkpoint.get("rewarded_task_ids", {})
+		if raw_rewards is Dictionary:
+			checkpoint_rewards = raw_rewards.duplicate()
+		checkpoint_rewards[task_id] = true
+		campaign_checkpoint["rewarded_task_ids"] = checkpoint_rewards
 		campaign_checkpoint["money"] = int(campaign_checkpoint.get("money", 0)) + amount
+	rewarded_task_ids[task_id] = true
+	money += amount
 	return true
 
 
