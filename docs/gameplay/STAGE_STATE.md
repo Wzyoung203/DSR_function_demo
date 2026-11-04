@@ -175,8 +175,11 @@
 整数下限条件使用 `QuestCondition.int_at_least(key, value)`；手写 `.tres` 时
 `source=6`、`min_value=N`。该来源追加在枚举末尾，原有字段、旗标、物品、交互和区域条件的整数索引保持不变。
 
-奖励控制器按 `completed_level` 查询本关奖励；`claimed_reward_levels` 只记录对应关卡。
-第1关领取后第2关仍可领取，第2关领取后第3～5关同理。具体配置说明见[关卡奖励](REWARDS.md)。
+货币商店按 `completed_level` 与 `GameState.money` 展示商品：`unlock_level <= completed_level`
+且“一次性商品尚未购买”的条目才可见，购买由 `ShopController` 复核并执行，`GameState.money`
+与 `purchased_shop_item_ids` 同步进酒店检查点。任务金额由 `QuestDefinition.money_reward`
+在首次进入完成态时一次性发放，并补写进匹配完成关卡的检查点。具体配置与回滚规则见
+[货币商店与任务奖励](REWARDS.md)。
 
 正式切场景统一经过 `SceneTransition`。切换前先把 `World3D` 的环境恢复为中性回退值，避免酒馆环境光残留到没有
 自己的 `WorldEnvironment` 的关卡；传送门、关卡按钮和死亡重开不会各自复制渲染清理代码。

@@ -14,7 +14,7 @@
 movement_demo/
 ├── project.godot                 工程与输入配置，主入口为 scenes/main.tscn
 ├── scenes/
-│   ├── main.tscn          酒馆主场景，F5 入口；含任务、奖励 NPC、竞技场与关卡传送门
+│   ├── main.tscn          酒馆主场景，F5 入口；含任务、商店 NPC（RewardNPC）、竞技场与关卡传送门
 │   ├── arena.tscn         战斗区域与敌人实例
 │   ├── enemy/             公共 enemy.tscn，types/兵种继承场景，levels/lvl_N/关卡预设
 │   ├── player/            独立 player.tscn、player_camera_rig.tscn 与战斗／生命／装备子场景
@@ -80,7 +80,7 @@ movement_demo/
 
 正式场景切换统一经过 `scripts/systems/scene_transition.gd`。该入口在释放当前场景前，把 `World3D.environment` 与 `fallback_environment` 恢复为显式中性环境，避免 GL Compatibility 在目标场景没有 `WorldEnvironment` 时沿用上一场景的环境光。酒馆关卡门、五关返程门、死亡重开和返回酒店都使用这一入口；目标场景自身配置的 `WorldEnvironment` 仍可在加载后覆盖该中性回退。
 
-`scripts/debug/coordinator_paths.gd` 保留 DebugSettings 入口，使用世界空间 Mesh 绘制 RTS 路线、箭头和站位，以及面积观察状态、责任预约和未来路线。每秒最多十次读取公开副本，不调用导航、规划或补写观察；成员颜色在死亡减员后保持稳定。当前 `main.tscn` 按用户确认保留任务面板、奖励面板及交互演示物；五关场景不挂载这套酒馆任务节点，交互组件仍可由 `tests/interaction_fixture.gd` 独立装配验证。五关清场后仍只开放返程门，回酒馆与 A 交互后才解锁下一关。
+`scripts/debug/coordinator_paths.gd` 保留 DebugSettings 入口，使用世界空间 Mesh 绘制 RTS 路线、箭头和站位，以及面积观察状态、责任预约和未来路线。每秒最多十次读取公开副本，不调用导航、规划或补写观察；成员颜色在死亡减员后保持稳定。当前 `main.tscn` 按用户确认保留任务面板、商店面板及交互演示物；五关场景不挂载这套酒馆任务节点，交互组件仍可由 `tests/interaction_fixture.gd` 独立装配验证。五关清场后仍只开放返程门，回酒馆与 A 交互后才解锁下一关。
 
 | 文件／组件 | 职责与接口边界 |
 | --- | --- |
