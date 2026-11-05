@@ -65,7 +65,7 @@ scenes/ui/shop_board.tscn                   货币商店界面
 | 唱片机 | 主房间东南 | 使用，可重复 | 开／关音乐，写入 `music_playing`；接取任务前后都能操作，接取前操作不会推进任务状态 |
 | 关卡传送门 | 酒馆东侧门口 | 进入 | 未接 A 任务时提示并拒绝；A 每次解锁下一关后，按 E 切换到对应关卡 |
 | 酒馆返回传送门 | 各关出生点附近 | 返回 | 本关清空后出现；记录完成关卡与玩家状态并返回酒馆 |
-| 商店 NPC | 酒馆东侧房间 | 交互 | 靠近按 E 打开货币商店；显示“商店”标签，按当前余额与完成关卡展示可购买商品 |
+| 商店 NPC | 酒馆东侧房间 | 交互 | 靠近按 E 打开货币商店；显示“商店”标签，可购买商品按自适应网格排列 |
 
 关卡传送门在首次进入时读取 `QuestController.status_of("task_a")`；后续按
 `GameState.completed_level` 与 `available_level` 判定是否已由 A 解锁。目标场景由
@@ -80,7 +80,8 @@ scenes/ui/shop_board.tscn                   货币商店界面
 标签改为“商店”。普通对话前，NPC 会发出 `interaction_requested(player)`；该 NPC 直接调用
 `ShopController.open_shop_for_player(player)`，成功打开商店后吞掉本次输入；目录为空、缺面板、
 缺玩家或商店拒绝打开时才回退普通对话。可见商品、价格、余额和一次性购买记录由 `ShopController`
-与 `GameState` 共同决定，见[货币商店与任务奖励](REWARDS.md)。
+与 `GameState` 共同决定；`ShopBoard` 默认每行 3 张商品卡，窄窗口自动降为 2 或 1 列并保持纵向滚动，
+见[货币商店与任务奖励](REWARDS.md)。
 
 对话影响是打开交互物自己的对话资源，不动 NPC 对话；音乐声音事件继续进入既有听觉系统。
 

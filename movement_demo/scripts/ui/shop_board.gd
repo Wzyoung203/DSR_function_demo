@@ -6,9 +6,15 @@ extends CanvasLayer
 signal purchase_requested(item_id: StringName, slot: int)
 signal close_requested
 
+const GRID_GAP := 12
+
+@export_range(1, 6, 1) var preferred_columns: int = 3
+@export_range(120, 320, 10) var minimum_card_width: float = 190.0
+
 @onready var title_label: Label = $Backdrop/Center/Panel/Margin/Content/Header/Title
 @onready var balance_label: Label = $Backdrop/Center/Panel/Margin/Content/Header/Balance
-@onready var items_container: VBoxContainer = $Backdrop/Center/Panel/Margin/Content/Scroll/Items
+@onready var scroll: ScrollContainer = $Backdrop/Center/Panel/Margin/Content/Scroll
+@onready var items_container: GridContainer = $Backdrop/Center/Panel/Margin/Content/Scroll/Items
 @onready var result_label: Label = $Backdrop/Center/Panel/Margin/Content/Result
 @onready var close_button: Button = $Backdrop/Center/Panel/Margin/Content/Close
 
@@ -21,6 +27,9 @@ var _visible_count := 0
 func _ready() -> void:
 	if close_button != null:
 		close_button.pressed.connect(_on_close_pressed)
+	if scroll != null:
+		scroll.resized.connect(_on_scroll_resized)
+	call_deferred("_update_columns_from_layout")
 
 
 func configure(items: Array, money: int) -> bool:
@@ -29,6 +38,7 @@ func configure(items: Array, money: int) -> bool:
 		return false
 	_items = items.duplicate(true)
 	_money = maxi(0, money)
+	_update_columns_from_layout()
 	_rebuild()
 	return true
 
@@ -39,6 +49,21 @@ func item_count() -> int:
 
 func balance_text() -> String:
 	return "货币：%d" % _money
+
+
+func columns_for_width(width: float) -> int:
+	var available := maxf(0.0, width)
+	var fit := floori((available + GRID_GAP) / (minimum_card_width + GRID_GAP))
+	return clampi(fit, 1, preferred_columns)
+
+
+func update_grid_for_width(width: float) -> void:
+	var next_columns := columns_for_width(width)
+	if items_container != null and items_container.columns != next_columns:
+		items_container.columns = next_columns
+	for child in items_container.get_children():
+		if child is Control:
+			(child as Control).custom_minimum_size.x = minimum_card_width
 
 
 func press_purchase(item_id: StringName, slot: int) -> bool:
@@ -101,6 +126,7 @@ func _rebuild() -> void:
 
 func _build_row(item: Dictionary) -> Control:
 	var row := VBoxContainer.new()
+	row.custom_minimum_size.x = minimum_card_width
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_theme_constant_override("separation", 6)
 
@@ -168,3 +194,15 @@ func _request_purchase(item_id: StringName, slot: int) -> void:
 
 func _on_close_pressed() -> void:
 	close_requested.emit()
+
+
+func _on_scroll_resized() -> void:
+	_update_columns_from_layout()
+
+
+func _update_columns_from_layout() -> void:
+	if items_container == null:
+		return
+	var viewport_width: float = get_viewport().get_visible_rect().size.x if is_inside_tree() else 0.0
+	var available: float = scroll.size.x if scroll != null and scroll.size.x > 0.0 else viewport_width
+	update_grid_for_width(available)

@@ -5,7 +5,7 @@ extends SceneTree
 
 const BOARD_SCENE := preload("res://scenes/ui/shop_board.tscn")
 
-const EXPECTED_CHECKS := 30
+const EXPECTED_CHECKS := 39
 
 var failures := 0
 var checks_run := 0
@@ -31,6 +31,24 @@ func _run() -> void:
 
 	check(not board.visible, "shop board starts hidden")
 	check(board.process_mode == Node.PROCESS_MODE_ALWAYS, "shop board processes while paused")
+	var grid_ready: bool = board.items_container is GridContainer
+	check(grid_ready, "shop items use a grid container")
+	check(grid_ready and int(board.items_container.get("columns")) == 3,
+		"shop grid defaults to three columns")
+	check(board.columns_for_width(640.0) == 3 if board.has_method("columns_for_width") else false,
+		"wide shop keeps three columns")
+	check(board.columns_for_width(500.0) == 2 if board.has_method("columns_for_width") else false,
+		"narrow shop uses two columns")
+	check(board.columns_for_width(360.0) == 1 if board.has_method("columns_for_width") else false,
+		"very narrow shop uses one column")
+	if board.has_method("update_grid_for_width"):
+		board.update_grid_for_width(500.0)
+	check(grid_ready and int(board.items_container.get("columns")) == 2,
+		"resize updates the live grid column count")
+	if board.has_method("update_grid_for_width"):
+		board.update_grid_for_width(640.0)
+	check(grid_ready and int(board.items_container.get("columns")) == 3,
+		"widening restores three columns")
 
 	var requests: Array = []
 	board.purchase_requested.connect(func(item_id: StringName, slot: int) -> void:
@@ -48,6 +66,19 @@ func _run() -> void:
 	check(board.last_purchase == {&"item_id": &"ammo", &"slot": -1},
 		"last_purchase records exact consumable intent")
 	check(requests == [[&"ammo", -1]], "purchase_requested emits exact intent")
+
+	var six_items: Array = [
+		{"id": &"one", "name": "一", "description": "", "price": 1, "weapon": false},
+		{"id": &"two", "name": "二", "description": "", "price": 2, "weapon": false},
+		{"id": &"three", "name": "三", "description": "", "price": 3, "weapon": false},
+		{"id": &"four", "name": "四", "description": "", "price": 4, "weapon": false},
+		{"id": &"five", "name": "五", "description": "", "price": 5, "weapon": false},
+		{"id": &"six", "name": "六", "description": "", "price": 6, "weapon": false},
+	]
+	check(board.configure(six_items, 100) and board.item_count() == 6,
+		"six items populate two automatic grid rows")
+	check(board.items_container.get_child_count() == 6,
+		"grid contains one child per visible item")
 
 	var mixed: Array = [
 		{"id": &"first_aid", "name": "急救包", "description": "恢复 35 点生命", "price": 40, "weapon": false},
