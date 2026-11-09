@@ -19,4 +19,6 @@ func is_valid() -> bool:
 		return false
 	if effect == Effect.WEAPON:
 		return weapon_data != null and one_time
-	return effect in [Effect.HEAL, Effect.REFILL_AMMO, Effect.SYSTEM_PROGRESS]
+	if effect in [Effect.HEAL, Effect.SYSTEM_PROGRESS]:
+		return amount > 0
+	return effect == Effect.REFILL_AMMO

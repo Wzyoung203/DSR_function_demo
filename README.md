@@ -91,7 +91,7 @@
 | `resources/shop/shop_catalog.tres` | 商品列表（顺序即显示顺序） | [货币商店](docs/gameplay/REWARDS.md) |
 | ShopItemDefinition | 商品 ID、名称、说明、价格、解锁等级、效果、数值、武器引用、一次性 | 商品条目资源 |
 | ShopCatalog → Items | 拖入／新建 `ShopItemDefinition` | 目录读取时过滤空项、空 ID、负价格、未知效果、缺 `WeaponData` 的武器商品与重复 ID |
-| QuestDefinition → Money Reward | 完成时固定货币 | 五个主线任务为 100，支线默认 0；由任务控制器在首次进入完成态时发放 |
+| QuestDefinition → Money Reward | 完成时固定货币 | 默认 100；五个主线任务为 100，不奖励的任务显式设为 0 |
 | Equipment | 主副武器槽 | 商店 `WEAPON` 商品购买时覆盖所选槽位 |
 
 ## 常用脚本接口

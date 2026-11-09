@@ -286,7 +286,7 @@
 - `campaign_checkpoint_test`：酒店检查点恢复货币、已发任务奖励、一次性购买记录和完成时玩家快照，并退款检查点之后的花费。
 - `campaign_flow_test`：五关返程门、A 逐关解锁、动态传送门、跨关状态，以及购买商品进入第2关后死亡，返回酒店退款并回滚一次性武器与装备。
 - `shop_catalog_test`、`shop_state_test`、`shop_weapon_test`、`shop_board_test`、`shop_flow_test`：商品目录过滤、货币与检查点状态、武器槽覆盖、面板回传与购买流程。
-- `quest_money_reward_test`：任务金额一次性发放、五个主线任务各 100、支线保持 0。
+- `quest_money_reward_test`：默认／主线金额、一次性发放、无奖励支线为 0，以及付费支线同步当前关卡检查点。
 - `debug_complete_level_test`：Debug 总开关、一键完成当前关、单次完成信号和返程门流程。
 
 任务面板、交互物和 NPC 的独立夹具仍可用于隔离测试，但不能把夹具中的旧演示位置当成当前主场景配置；当前 `main.tscn` 已挂载任务面板。

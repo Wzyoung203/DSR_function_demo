@@ -310,15 +310,15 @@ await process_frame
 print("PASS" if state.money == 100 else "FAIL", " task reward does not repeat")
 ```
 
-Add a second assertion that `QuestDefinition.new().money_reward == 0` and that the saved five main quest resources expose `100`.
+Add a second assertion that `QuestDefinition.new().money_reward == 100` and that the saved five main quest resources expose `100`.
 
 - [ ] **Step 2: Run RED**
 
-Run the new test. Expected: `money_reward` missing and money remains zero.
+Run the new test. Expected: the defaulted reward amount is missing or wrong.
 
 - [ ] **Step 3: Implement task payout**
 
-Add `@export_range(0, 999999, 1) var money_reward: int = 0` to `QuestDefinition`.
+Add `@export_range(0, 999999, 1) var money_reward: int = 100` to `QuestDefinition`.
 
 In `QuestController.set_status()`, after assigning `_statuses[quest_id]`, call payout only when entering `COMPLETED`:
 
@@ -327,7 +327,7 @@ if status == Status.COMPLETED:
 	var definition := quest_definition(quest_id)
 	if definition != null and definition.money_reward > 0 and _state != null \
 			and _state.has_method(&"claim_task_reward"):
-		_state.claim_task_reward(quest_id, definition.money_reward, definition.stage_index)
+		_state.claim_task_reward(quest_id, definition.money_reward, int(_state.get(&"completed_level")))
 ```
 
 Set `money_reward = 100` on `Quest_task_a` and `Quest_task_level_2` through `Quest_task_level_5`. Leave `Quest_task_music` explicit at `0`.

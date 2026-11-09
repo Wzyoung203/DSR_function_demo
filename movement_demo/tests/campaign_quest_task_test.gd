@@ -1,6 +1,6 @@
 extends SceneTree
 
-## 五关任务与奖励资格：任务随 A 解锁/关卡完成更新，奖励只在第1关接口可领取。
+## 五关任务与奖励资格：任务随 A 解锁/关卡完成更新，商店消费固定货币奖励。
 ## 运行：godot --headless --path movement_demo --script res://tests/campaign_quest_task_test.gd
 
 const MAIN_SCENE := preload("res://scenes/main.tscn")

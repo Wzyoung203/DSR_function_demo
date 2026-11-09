@@ -73,11 +73,11 @@
 
 ## 任务金额
 
-`QuestDefinition` 新增 `money_reward: int = 0`。
+`QuestDefinition` 新增 `money_reward: int = 100`。
 
 `resources/stages/stage_table_template.tres` 的五条主线任务分别配置 `money_reward = 100`。支线任务保持显式 0，只有在其资源上配置金额后才发钱。
 
-`QuestController` 在任务从非完成状态进入 `COMPLETED` 时调用 `GameState.claim_task_reward(task_id, amount, stage_index)`。任务已完成终态和 `GameState.rewarded_task_ids` 共同防止重复发放。
+`QuestController` 在任务从非完成状态进入 `COMPLETED` 时调用 `GameState.claim_task_reward(task_id, amount, completed_level)`。任务已完成终态和 `GameState.rewarded_task_ids` 共同防止重复发放。
 
 任务完成发生在返程门记录检查点之后、酒馆任务控制器重新评估时。因此 `claim_task_reward()` 还要把该任务 ID 和新增金额同步补写进匹配当前完成关卡的检查点。恢复检查点时，`rewarded_task_ids` 会让新酒馆任务控制器只显示已完成，不再发第二次钱。
 

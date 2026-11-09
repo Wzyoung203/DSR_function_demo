@@ -7,7 +7,7 @@ const CatalogScript := preload("res://scripts/shop/shop_catalog.gd")
 const ItemScript := preload("res://scripts/shop/shop_item_definition.gd")
 const Catalog := preload("res://resources/shop/shop_catalog.tres")
 
-const EXPECTED_CHECKS := 28
+const EXPECTED_CHECKS := 30
 
 var failures := 0
 var checks_run := 0
@@ -61,6 +61,21 @@ func _run() -> void:
 		check(progress.effect == ItemScript.Effect.SYSTEM_PROGRESS, "system progress uses SYSTEM_PROGRESS")
 		check(progress.amount == 20, "system progress adds 20")
 		check(not progress.one_time, "system progress is repeatable")
+
+	var zero_heal := ItemScript.new()
+	zero_heal.id = &"zero_heal"
+	zero_heal.display_name = "Zero heal"
+	zero_heal.price = 10
+	zero_heal.effect = ItemScript.Effect.HEAL
+	zero_heal.amount = 0
+	check(not zero_heal.is_valid(), "healing products require a positive amount")
+	var zero_progress := ItemScript.new()
+	zero_progress.id = &"zero_progress"
+	zero_progress.display_name = "Zero progress"
+	zero_progress.price = 10
+	zero_progress.effect = ItemScript.Effect.SYSTEM_PROGRESS
+	zero_progress.amount = 0
+	check(not zero_progress.is_valid(), "progress products require a positive amount")
 
 	check(Catalog.item_by_id(&"first_aid") == items[0], "lookup returns the first valid product")
 	check(Catalog.item_by_id(&"missing") == null, "unknown product ID returns null")

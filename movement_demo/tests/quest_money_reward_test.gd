@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Task 3 fixed money: five main tasks pay 100 exactly once on entering COMPLETED,
-## QuestDefinition defaults money_reward to 0, and Quest_task_music stays 0.
+## Task 3 fixed money: QuestDefinition defaults to 100, five main tasks pay once,
+## paid side quests synchronize the active checkpoint, and Quest_task_music stays 0.
 ## Run: godot --headless --path movement_demo --script res://tests/quest_money_reward_test.gd
 
 const MAIN_SCENE := preload("res://scenes/main.tscn")
@@ -16,7 +16,7 @@ const MAIN_TASK_IDS: Array[StringName] = [
 	&"task_level_4",
 	&"task_level_5",
 ]
-const EXPECTED_CHECKS := 9
+const EXPECTED_CHECKS := 11
 
 var failures := 0
 var checks_run := 0
@@ -61,7 +61,7 @@ func _run() -> void:
 	check(state.money == 100, "task reward does not repeat")
 
 	var default_definition = QuestDefinitionScript.new()
-	check(default_definition.get("money_reward") == 0, "QuestDefinition.money_reward defaults to 0")
+	check(default_definition.get("money_reward") == 100, "QuestDefinition.money_reward defaults to 100")
 
 	for task_id in MAIN_TASK_IDS:
 		var definition = StageTableResource.quest_by_id(task_id)
@@ -71,6 +71,19 @@ func _run() -> void:
 	var music_definition = StageTableResource.quest_by_id(&"task_music")
 	check(music_definition != null and music_definition.get("money_reward") == 0,
 		"Quest_task_music keeps money_reward 0")
+
+	state.money = 0
+	state.rewarded_task_ids = {}
+	state.campaign_checkpoint = {}
+	state.completed_level = 2
+	state.record_campaign_checkpoint(2, {})
+	scene.get_node("QuestController").complete(&"task_level_4")
+	check(state.money == 100, "paid side quest uses the active campaign level")
+	check(
+		int(state.campaign_checkpoint.get("money", 0)) == 100
+		and bool(state.campaign_checkpoint.get("rewarded_task_ids", {}).get(&"task_level_4", false)),
+		"paid side quest synchronizes the active checkpoint"
+	)
 
 	_finish(scene)
 

@@ -55,6 +55,7 @@ SPECIAL = {
     "shot_collision_test.gd": "run by combat_compatibility_test",
     "range_reset_test.gd": "run by presentation_range_reset_test",
     "presentation_editor_test.gd": "standalone --headless --editor --script",
+    "encounter_controller_edge_test.gd": "isolated compatibility test; intentionally emits push_error for rejected missing-board dependency; run standalone",
     "weapon_fire_mode_inspector_test.gd": "standalone --headless --editor --script",
     "enemy/enemy_training_inspector_test.gd": "standalone --headless --editor --script",
     "test_cover_instance_save.gd": "Godot AI editor harness with saved arena fixture",

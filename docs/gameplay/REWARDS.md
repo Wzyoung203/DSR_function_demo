@@ -28,7 +28,8 @@
 | 弹药补给 | `ammo` | 30 | `REFILL_AMMO` | 无 |
 | 系统进度 | `system_progress` | 50 | `SYSTEM_PROGRESS` | 20 |
 
-目录读取时过滤无效项：空项、空 ID、负价格、未知效果、武器商品缺少 `WeaponData` 或未开 `One Time`。
+目录读取时过滤无效项：空项、空 ID、负价格、未知效果、回血／系统进度商品的非正数值、武器商品缺少
+`WeaponData` 或未开 `One Time`。
 
 ## 可见性与购买
 
@@ -62,13 +63,14 @@ and not (item.one_time and GameState.has_purchased_shop_item(item.id))
 
 ## 任务金额
 
-`QuestDefinition` 新增 `money_reward`，默认 0。任务控制器在任务首次进入 `COMPLETED` 时调用
-`GameState.claim_task_reward(task_id, amount, stage_index)` 发放一次；`GameState.rewarded_task_ids`
+`QuestDefinition.money_reward` 默认 100。任务控制器在任务首次进入 `COMPLETED` 时调用
+`GameState.claim_task_reward(task_id, amount, completed_level)` 发放一次；`GameState.rewarded_task_ids`
 和任务完成终态共同防止重复发放。五个主线任务（`task_a`、`task_level_2` 至 `task_level_5`）均为 100，
 唱片机支线 `task_music` 保持 0，只有在其资源上配置金额后才发钱。
 
 任务完成发生在返程门记录检查点之后、酒馆任务控制器重新评估时，因此 `claim_task_reward()` 会把该任务 ID
-和新增金额补写进匹配完成关卡的检查点；返回酒店恢复检查点时 `rewarded_task_ids` 让新的任务控制器只显示已完成，
+和新增金额补写进当前 `completed_level` 对应的检查点，不依赖任务自身的 `stage_index`；返回酒店恢复检查点时
+`rewarded_task_ids` 让新的任务控制器只显示已完成，
 不会第二次发钱。
 
 ## 当前关重试与酒店退款
