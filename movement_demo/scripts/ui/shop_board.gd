@@ -1,12 +1,13 @@
 extends CanvasLayer
 
-## Currency shop board: builds one visible row per view dictionary and only
+## Currency shop board: builds one visible card per view dictionary and only
 ## emits purchase intent. It never mutates GameState, player, or equipment.
 
 signal purchase_requested(item_id: StringName, slot: int)
 signal close_requested
 
 const GRID_GAP := 12
+const LAYOUT_PADDING := 72.0
 
 @export_range(1, 6, 1) var preferred_columns: int = 3
 @export_range(120, 320, 10) var minimum_card_width: float = 190.0
@@ -29,6 +30,8 @@ func _ready() -> void:
 		close_button.pressed.connect(_on_close_pressed)
 	if scroll != null:
 		scroll.resized.connect(_on_scroll_resized)
+	if is_inside_tree() and not get_viewport().size_changed.is_connected(_update_columns_from_layout):
+		get_viewport().size_changed.connect(_update_columns_from_layout)
 	call_deferred("_update_columns_from_layout")
 
 
@@ -52,7 +55,7 @@ func balance_text() -> String:
 
 
 func columns_for_width(width: float) -> int:
-	var available := maxf(0.0, width)
+	var available := maxf(0.0, width - LAYOUT_PADDING)
 	var fit := floori((available + GRID_GAP) / (minimum_card_width + GRID_GAP))
 	return clampi(fit, 1, preferred_columns)
 
@@ -61,6 +64,9 @@ func update_grid_for_width(width: float) -> void:
 	var next_columns := columns_for_width(width)
 	if items_container != null and items_container.columns != next_columns:
 		items_container.columns = next_columns
+	if scroll != null:
+		scroll.custom_minimum_size.x = minimum_card_width * next_columns \
+			+ GRID_GAP * maxi(0, next_columns - 1)
 	for child in items_container.get_children():
 		if child is Control:
 			(child as Control).custom_minimum_size.x = minimum_card_width
@@ -204,5 +210,4 @@ func _update_columns_from_layout() -> void:
 	if items_container == null:
 		return
 	var viewport_width: float = get_viewport().get_visible_rect().size.x if is_inside_tree() else 0.0
-	var available: float = scroll.size.x if scroll != null and scroll.size.x > 0.0 else viewport_width
-	update_grid_for_width(available)
+	update_grid_for_width(viewport_width)
